@@ -44,7 +44,7 @@ Knowing the core test failed, I extracted the metrics from `APIResponsivenessPro
 
 **Analysis:** The Prometheus telemetry provides data-backed proof of severe Garbage Collection churn induced by the 9x allocation spike. It is important to note that these metrics are cumulative counters over the entire lifetime of the API server process during this test run (approx. 2 hours). Over that entire cumulative lifespan, a staggering 41.25% of all CPU time consumed by the API server (68,983 out of 167,217 seconds) was spent on Garbage Collection. 
 
-To visualize this CPU starvation, the following chart breaks down the total GC time. Crucially, as the chart shows, 20,255 CPU seconds were spent on "Mark Assists." This specific metric proves that the allocation rate outpaced dedicated GC workers, forcing the Go runtime to hijack the goroutines serving the `LIST pods` HTTP requests to help sweep memory. This request-thread starvation perfectly explains the massive `runtime.selectgo` blocking seen in profiles and confirms the root cause of the 58-second latency breach on `LIST` calls.
+To visualize this CPU starvation, the following chart breaks down the total GC time. Crucially, as the chart shows, 20,255 CPU seconds were spent on "Mark Assists." This specific metric proves that the allocation rate outpaced dedicated GC workers, forcing the Go runtime to hijack the goroutines serving the `LIST pods` HTTP requests to help sweep memory. This request-thread starvation strongly correlates with the massive `runtime.selectgo` blocking seen in profiles and is the most probable root cause of the 58-second latency breach on `LIST` calls.
 
 ```mermaid
 pie title API Server CPU: GC vs. Non-GC (2-Hour Cumulative)
