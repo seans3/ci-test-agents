@@ -3,6 +3,13 @@
 **Baseline Run:** `2063667733328826368` (Standard)
 **Experimental Run:** `2064211321670340608` (Added Restarts + 3-Node Control Plane)
 
+## Experimental Configuration Differences
+By comparing the `prowjob.json` definitions for both runs, I identified the exact environmental variables injected into the Prow Pod specification to trigger the experimental behavior. No custom pull requests were patched into the runs; instead, the underlying framework behavior was toggled natively via these environment variables:
+
+1.  **`CONTROL_PLANE_COUNT: 1 -> 3`**: Instructs `kops` to provision a 3-node High Availability (HA) control plane topology behind a load balancer instead of a single instance.
+2.  **`CL2_RESTART_APISERVER: <None> -> true`**: Instructs `ClusterLoader2` to inject API server restarts during the execution of the scale test to specifically measure the impact of cold watch caches.
+3.  **`CL2_HEAP_PROFILE_INTERVAL: <None> -> 5m`**: Added to capture more granular memory profiles during the test.
+
 ## Executive Summary
 The experimental changes (adding restarts and a 3-node topology) **did not stabilize the control plane**. In fact, the experimental run exhibited severe performance degradation compared to the baseline. While the restarts successfully allowed us to measure the watch cache initialization latency cost, the 3-node topology experienced catastrophic Garbage Collection (GC) churn, resulting in an API Responsiveness SLO breach for `LIST pods`.
 
