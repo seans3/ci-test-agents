@@ -11,11 +11,11 @@ By comparing the `prowjob.json` definitions for both runs, I identified the exac
 3.  **`CL2_HEAP_PROFILE_INTERVAL: <None> -> 5m`**: Added to capture more granular memory profiles during the test.
 
 ## Executive Summary
-This report addresses two specific experimental goals requested: 1) Measuring watch cache initialization latency via restarts, and 2) Determining if a 3-node topology stabilizes the control plane. 
+*Assumed Experimental Intent: Based on the colleague's request to "measure watch cache initialization... and see if have 3 nodes stabilizes the results," this analysis assumes the experiment was a deliberate stress test. The goal was to use intentional API server restarts to drop all watches, forcing a massive "Thundering Herd" of `LIST` requests, in order to determine if scaling to a 3-node High Availability (HA) topology provides enough capacity to stabilize the cluster and absorb the spike without breaching SLOs.*
 
 **Conclusions:**
-1.  **Watch Cache Initialization:** The latency cost is practically negligible. The cumulative initialization time over the entire 2-hour run was only ~60 milliseconds. It is not a bottleneck.
-2.  **3-Node Stability:** The stability test is **inconclusive**. The intentional API server restarts triggered an artificial, synchronized "Thundering Herd" of `LIST` requests that broke the cluster. Because the 3-node run was subjected to this artificial nuke mid-flight, it cannot be organically compared to the un-restarted baseline run.
+1.  **Watch Cache Initialization:** The latency penalty for initializing the watch cache from a cold state is practically negligible. The cumulative initialization time over the entire 2-hour run was only ~60 milliseconds. It is not a bottleneck.
+2.  **3-Node Stability under Stress:** The 3-node HA control plane **failed** to stabilize the cluster under the restart-induced stress. The 3 nodes were instantly overwhelmed by the concurrent `LIST` requests, suffering an 11x memory allocation spike that starved the GC threads, saturated the network, and ultimately breached the API Responsiveness SLO with a 42.6-second latency.
 
 ---
 
@@ -76,7 +76,7 @@ pie title 30-Second Spike Window: CPU Time Breakdown
 ---
 
 ## Conclusion
-The experiment failed to answer the original question of whether a 3-node control plane stabilizes organic load. By introducing two confounding variables simultaneously (3-node HA *and* API server restarts), the experiment invalidated the stability comparison. The restarts artificially severed thousands of watches, triggering a catastrophic "Thundering Herd" of `LIST` requests that broke the cluster via GC starvation. To determine if 3 nodes actually stabilize the cluster, a new experiment must be run with 3 nodes but *without* the `CL2_RESTART_APISERVER` flag.
+Assuming this experiment was designed as a stress test, the results prove that a 3-node High Availability control plane is not sufficient to stabilize the cluster and survive a cold-start "Thundering Herd" at a 5,000-node scale. When the API servers were intentionally restarted, the synchronized wave of fallback `LIST` requests overwhelmed the expanded capacity. The cluster suffered an 11x memory allocation spike, which saturated the garbage collector, resulting in severe thread starvation (`gcAssistAlloc`) and ultimately breaching the API Responsiveness SLO.
 
 ---
 
