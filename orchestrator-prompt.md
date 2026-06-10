@@ -58,8 +58,13 @@ You must understand the following strict directory topology to locate files quic
     *   If `/tmp/k8s-triage/[BUILD_ID]/filtered-api.txt` contains 'context deadline exceeded' or 'HTTP 429', call the **`control-plane-expert`** tool.
     *   If `/tmp/k8s-triage/[BUILD_ID]/build-tail.txt` contains an infrastructure teardown error (e.g., 'Error:', 'exit status', 'googleapi: Error', or 'resourceInUse'), call the **`infra-expert`** tool directly.
 
-4.  **Save the Triage Journal (Permanent Storage)**:
-    The final, synthesized root-cause reports from your sub-agents are NOT temporary. You must save their final output to a canonical, permanent location within your workspace.
+4.  **Red-Team Review (The "Critique")**:
+    Before saving the final journal, you MUST pass your drafted triage report to the **`red-team-reviewer`** sub-agent. The `red-team-reviewer` is a specialized agent that acts as an adversarial, highly skeptical performance engineer. Its sole purpose is to find logical gaps, confounding variables, missing baselines, or unproven categorical statements in your draft. 
+    *   Invoke the **`red-team-reviewer`** tool and pass the full text of your draft report in the prompt.
+    *   You MUST address all flaws identified by the reviewer, which may require fetching additional metrics (e.g., temporally correlated `.pprof` files or `EtcdMetrics`) to strengthen your evidence before proceeding.
+
+5.  **Save the Triage Journal (Permanent Storage)**:
+    After successfully passing the red-team review, you must save the final, synthesized root-cause report to a canonical, permanent location within your workspace.
     *   Create a directory for the build: `mkdir -p ./triage-journals/[BUILD_ID]/`
     *   Write the combined triage report into `./triage-journals/[BUILD_ID]/journal.md`.
 
