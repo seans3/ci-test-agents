@@ -52,7 +52,7 @@ The failure explicitly occurred on the `LIST` verb for `pods` at the `cluster` s
 **Analysis:** The temporally correlated CPU profile provides data-backed proof of severe Garbage Collection churn *during the exact window of the failure*. The nearly 9x allocation spike forced the Go runtime into a panic. As visualized in the chart below, 22.5% of all available CPU time across the multi-core node was spent purely on Garbage Collection. Crucially, 68.92 CPU seconds were spent on `gcAssistAlloc` (Mark Assists). This proves that the allocation rate vastly outpaced the dedicated background GC workers, forcing the Go runtime to hijack the goroutines that were supposed to be serving the `LIST pods` HTTP requests and forcing them to sweep memory instead. This request-thread starvation perfectly explains the 59.85-second latency breach.
 
 ```mermaid
-pie title 30-Second Spike Window: CPU Time Breakdown
+pie title API Server CPU: GC vs. Non-GC (30-Second Spike Window)
     "GC: Mark Assist (Thread Hijack)" : 68.92
     "GC: Background Mark Worker" : 36.08
     "Non-GC Processing" : 360.85

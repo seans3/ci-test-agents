@@ -47,7 +47,7 @@ Knowing the core test failed, I extracted the metrics from `APIResponsivenessPro
 To visualize this CPU starvation, the following chart breaks down the total GC time. Crucially, as the chart shows, 20,255 CPU seconds were spent on "Mark Assists." This specific metric proves that the allocation rate outpaced dedicated GC workers, forcing the Go runtime to hijack the goroutines serving the `LIST pods` HTTP requests to help sweep memory. This request-thread starvation perfectly explains the massive `runtime.selectgo` blocking seen in profiles and confirms the root cause of the 58-second latency breach on `LIST` calls.
 
 ```mermaid
-pie title API Server CPU Time Breakdown (Seconds)
+pie title API Server CPU: GC vs. Non-GC (2-Hour Cumulative)
     "GC: Mark Assist (Thread Hijack)" : 20255.61
     "GC: Dedicated Workers" : 26418.06
     "GC: Idle Workers" : 22210.39
