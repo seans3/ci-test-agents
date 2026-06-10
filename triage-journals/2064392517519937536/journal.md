@@ -37,12 +37,12 @@ Knowing the core test failed, I extracted the metrics from `APIResponsivenessPro
 * Baseline profiles: `kube-apiserver_MemoryProfile_load_*.pprof`
 * Prometheus Snapshot: `gs://kubernetes-ci-logs/logs/ci-kubernetes-e2e-gce-scale-performance-5000/2064392517519937536/artifacts/MetricsForE2E_load_2026-06-09T20:11:52Z.json`
 
-**Evidence:** Baseline `alloc_space` profiles from the scale tests reveal extreme memory allocation rates (~19 GB/s) primarily driven by JSON decoding and `structured-merge-diff` during the serialization of hundreds of thousands of pod objects. While this strongly suggests GC churn, further proof was extracted from the `MetricsForE2E` Prometheus snapshot for the `kube-apiserver` job:
+**Evidence:** Baseline `alloc_space` profiles taken early in the test (`18:13:25Z`) establish a normal heavy-load allocation rate of ~20 GB/s. However, the profile taken during the `LIST pods` storm just before the failure (`20:08:48Z`) reveals an extreme allocation spike of ~179 GB/s (5.3 TB over 30 seconds), primarily driven by JSON decoding and `structured-merge-diff`. While this 9x baseline spike strongly suggests GC churn, further proof was extracted from the `MetricsForE2E` Prometheus snapshot for the `kube-apiserver` job:
 * `process_cpu_seconds_total`: 167,217.49
 * `go_cpu_classes_gc_total_cpu_seconds_total`: 68,983.88
 * `go_cpu_classes_gc_mark_assist_cpu_seconds_total`: 20,255.61
 
-**Analysis:** The Prometheus telemetry provides data-backed proof of severe Garbage Collection churn. A staggering 41.25% of all CPU time consumed by the API server (68,983 out of 167,217 seconds) was spent on Garbage Collection. 
+**Analysis:** The Prometheus telemetry provides data-backed proof of severe Garbage Collection churn induced by the 9x allocation spike. A staggering 41.25% of all CPU time consumed by the API server (68,983 out of 167,217 seconds) was spent on Garbage Collection. 
 
 To visualize this CPU starvation, the following chart breaks down the total GC time. Crucially, as the chart shows, 20,255 CPU seconds were spent on "Mark Assists." This specific metric proves that the allocation rate outpaced dedicated GC workers, forcing the Go runtime to hijack the goroutines serving the `LIST pods` HTTP requests to help sweep memory. This request-thread starvation perfectly explains the massive `runtime.selectgo` blocking seen in profiles and confirms the root cause of the 58-second latency breach on `LIST` calls.
 
