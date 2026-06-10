@@ -55,17 +55,15 @@ To understand *why* the 3-node setup breached the latency SLO under the Thunderi
     *   Total CPU Consumed (per heavily loaded node): 322.30s
     *   `runtime.gcAssistAlloc` (Mark Assists): 69.82s
     *   `runtime.gcBgMarkWorker` (Background GC): 34.81s
-*   **Lock Contention & Network Saturation:**
-    *   `kube-apiserver_BlockProfile`: Reveals a staggering **148,317 hours** of cumulative blocked time in `runtime.selectgo`, primarily originating from HTTP/2 request handling and dispatch locks.
-    *   `process_network_transmit_bytes_total`: The control plane had to serialize and push **855.27 GB** of network traffic (predominantly the ~35MB `LIST pods` payloads) out over the network interfaces.
+*   **Lock Contention (Spike Window):**
+    *   `kube-apiserver_BlockProfile`: Reveals a staggering **148,317 hours** of cumulative blocked time in `runtime.selectgo`. *(Note: Block profiles measure the cumulative sum across all goroutines. This indicates tens of thousands of goroutines were simultaneously blocked for seconds at a time)*, primarily originating from HTTP/2 request handling and dispatch locks.
 
 **Analysis:** The temporally correlated `.pprof` profile provides data-backed proof of severe Garbage Collection churn. The 6.07 TB allocation spike (driven by JSON decoding as the API servers attempted to build the massive `LIST` payloads) forced the Go runtime into a panic on the heavily loaded nodes. During this 30-second window, **32.5%** of all available CPU time across the multi-core node was spent purely on Garbage Collection. Crucially, 69.82 CPU seconds were spent on `gcAssistAlloc`, proving the Go runtime hijacked the goroutines serving the requests to sweep memory instead.
 
-While the GC thread starvation initiated the latency breach, it was not the sole cause of the 42-second delay. It compounded with two other catastrophic bottlenecks:
-1. **Network Saturation:** Pushing 855 GB of JSON payloads across the network interfaces saturated the available bandwidth and HTTP/2 flow control limits.
-2. **Lock Contention:** The `BlockProfile` proves that the hundreds of concurrent `LIST` requests spent massive amounts of time blocked waiting on internal channels and locks (`runtime.selectgo`), unable to acquire the resources needed to proceed because other threads were trapped in GC Mark Assists. 
+While the GC thread starvation initiated the latency breach, it compounded with another catastrophic bottleneck:
+1. **Lock Contention:** The `BlockProfile` proves that the hundreds of concurrent `LIST` requests spent massive amounts of time blocked waiting on internal channels and locks (`runtime.selectgo`), unable to acquire the resources needed to proceed because other threads were trapped in GC Mark Assists. 
 
-This combination of GC thread-hijacking, lock contention, and network saturation strongly correlates with and is the most probable cause of the 42.6-second latency breach.
+This combination of GC thread-hijacking and lock contention strongly correlates with and is a major contributing factor to the 42.6-second latency breach.
 
 ```mermaid
 pie title 30-Second Spike Window: CPU Time Breakdown
