@@ -43,24 +43,19 @@ The failure explicitly occurred on the `LIST` verb for `pods` at the `cluster` s
 ### 3. CPU, Memory Profile, and GC Telemetry Analysis (Data-Backed Proof of GC Churn)
 **Artifacts:**
 * Baseline profiles: `kube-apiserver_MemoryProfile_load_*.pprof`
-* Prometheus Snapshot: `gs://kubernetes-ci-logs/logs/ci-kubernetes-e2e-gce-scale-performance-5000/2062218224480555008/artifacts/MetricsForE2E_load_2026-06-03T19:54:25Z.json`
+* Spike profile: `kube-apiserver_CPUProfile_load_2026-06-03T19:53:27Z.pprof`
 
-**Evidence:** Baseline `alloc_space` profiles taken early in the test (`18:13:44Z`) establish a normal heavy-load allocation rate of ~20 GB/s. However, the profile taken during the `LIST pods` storm just before the failure (`19:54:02Z`) reveals an extreme allocation spike of ~174 GB/s (5.2 TB over 30 seconds), primarily driven by JSON decoding and `structured-merge-diff`. While this nearly 9x baseline spike strongly suggests GC churn, further proof was extracted from the `MetricsForE2E` Prometheus snapshot for the `kube-apiserver` job:
-* `process_cpu_seconds_total`: 140,709.95
-* `go_cpu_classes_gc_total_cpu_seconds_total`: 55,802.06
-* `go_cpu_classes_gc_mark_assist_cpu_seconds_total`: 15,844.41
+**Evidence:** Baseline `alloc_space` profiles taken early in the test (`18:13:44Z`) establish a normal heavy-load allocation rate of ~20 GB/s. However, the `alloc_space` profile taken during the `LIST pods` storm just before the failure (`19:54:02Z`) reveals an extreme allocation spike of ~174 GB/s (5.2 TB over 30 seconds), primarily driven by JSON decoding and `structured-merge-diff`. Because cumulative metrics cannot accurately prove what happened during an isolated 30-second spike, I analyzed the exact `cpu` profile generated during the spike window (`19:53:27Z`). During this 30-second window, the API server consumed 465.85s of total CPU time across its available cores. Of that time:
+* `runtime.gcAssistAlloc`: 68.92s
+* `runtime.gcBgMarkWorker`: 36.08s
 
-**Analysis:** The Prometheus telemetry provides data-backed proof of severe Garbage Collection churn induced by the nearly 9x allocation spike. It is important to note that these metrics are cumulative counters over the entire lifetime of the API server process during this test run. Over that entire cumulative lifespan, a staggering 39.6% of all CPU time consumed by the API server (55,802 out of 140,709 seconds) was spent on Garbage Collection.
-
-To visualize this CPU starvation, the following chart breaks down the total GC time. Crucially, as the chart shows, 15,844 CPU seconds were spent on "Mark Assists." This specific metric confirms that the allocation rate outpaced dedicated GC workers, forcing the Go runtime to hijack the goroutines serving the `LIST pods` HTTP requests to help sweep memory. This request-thread starvation perfectly explains the massive latency breach on `LIST` calls.
+**Analysis:** The temporally correlated CPU profile provides data-backed proof of severe Garbage Collection churn *during the exact window of the failure*. The nearly 9x allocation spike forced the Go runtime into a panic. As visualized in the chart below, 22.5% of all available CPU time across the multi-core node was spent purely on Garbage Collection. Crucially, 68.92 CPU seconds were spent on `gcAssistAlloc` (Mark Assists). This proves that the allocation rate vastly outpaced the dedicated background GC workers, forcing the Go runtime to hijack the goroutines that were supposed to be serving the `LIST pods` HTTP requests and forcing them to sweep memory instead. This request-thread starvation perfectly explains the 59.85-second latency breach.
 
 ```mermaid
-pie title API Server CPU Time Breakdown (Seconds)
-    "GC: Mark Assist (Thread Hijack)" : 15844.41
-    "GC: Dedicated Workers" : 21844.06
-    "GC: Idle Workers" : 18034.08
-    "GC: Stop-the-world Pauses" : 79.50
-    "Non-GC Processing" : 84907.89
+pie title 30-Second Spike Window: CPU Time Breakdown
+    "GC: Mark Assist (Thread Hijack)" : 68.92
+    "GC: Background Mark Worker" : 36.08
+    "Non-GC Processing" : 360.85
 ```
 
 ### 4. Comparative Analysis (Success vs. Failure)
