@@ -7,9 +7,9 @@
 The primary root cause of this failure is an API Responsiveness SLO breach caused by a Thundering Herd of massive, unpaginated `LIST pods` requests that saturated the API Server. The subsequent infrastructure timeout during cluster deletion is a spurious secondary failure caused by the test framework aborting early due to the performance regression.
 
 ## Triage Narrative
-As the Triage Orchestrator, I began by polling the GCS bucket and identified that build `2064392517519937536` finished with a `"FAILURE"` status. 
+As the Triage Orchestrator, I began by polling the GCS bucket and identified that build `2064392517519937536` finished with a `"FAILURE"` status.
 
-To determine the true cause without downloading 55GB of raw logs into memory, I utilized zero-memory Unix streams to filter the artifacts into `/tmp/k8s-triage/2064392517519937536/`. I first ran a tail check on `build-log.txt` (Filter A), which revealed an `exit status 255` teardown deadlock caused by `googleapi: Error 400` resource locks. 
+To determine the true cause without downloading 55GB of raw logs into memory, I utilized zero-memory Unix streams to filter the artifacts into `/tmp/k8s-triage/2064392517519937536/`. I first ran a tail check on `build-log.txt` (Filter A), which revealed an `exit status 255` teardown deadlock caused by `googleapi: Error 400` resource locks.
 
 However, per the Core Triage Principles, I could not assume this was the primary failure. I extracted the test results from `junit.xml` (Filter B) to establish the ground truth. This revealed that the `ClusterLoaderV2` suite logged 2 internal failures prior to the teardown, explicitly proving that the teardown crash was a spurious secondary symptom.
 
@@ -32,10 +32,17 @@ Knowing the core test failed, I extracted the metrics from `APIResponsivenessPro
 {"Latency":60000,"Count":"658","SlowCount":"57"}
 ```
 
-### 3. CPU & Memory Profile Analysis (The GC Jitter Hypothesis)
-**Artifacts:** Baseline profiles `kube-apiserver_MemoryProfile_load_*.pprof` and `kube-apiserver_BlockProfile_load_*.pprof`
-**Evidence:** Baseline `alloc_space` profiles from these scale tests reveal extreme memory allocation rates (over **570 GB** in a 30-second window, or ~19 GB/s) primarily driven by JSON decoding and `structured-merge-diff` during the serialization of hundreds of thousands of pod objects.
-**Hypothesis:** This extreme allocation rate forces the Go Garbage Collector (GC) into aggressive churn, introducing micro-pauses. Correlated with the `block` profiles showing massive delays in `runtime.selectgo`, it is highly probable that GC pauses combined with CPU serialization locks prevent the API server from flushing events, causing internal `WATCH` channels to block and HTTP/2 connections to drop. *(Note: Absolute proof requires correlating this with `go_gc_duration_seconds` in the Prometheus snapshot).*
+### 3. CPU, Memory Profile, and GC Telemetry Analysis (Data-Backed Proof of GC Churn)
+**Artifacts:**
+* Baseline profiles: `kube-apiserver_MemoryProfile_load_*.pprof`
+* Prometheus Snapshot: `gs://kubernetes-ci-logs/logs/ci-kubernetes-e2e-gce-scale-performance-5000/2064392517519937536/artifacts/MetricsForE2E_load_2026-06-09T20:11:52Z.json`
+
+**Evidence:** Baseline `alloc_space` profiles from the scale tests reveal extreme memory allocation rates (~19 GB/s) primarily driven by JSON decoding and `structured-merge-diff` during the serialization of hundreds of thousands of pod objects. While this strongly suggests GC churn, further proof was extracted from the `MetricsForE2E` Prometheus snapshot for the `kube-apiserver` job:
+* `process_cpu_seconds_total`: 167,217.49
+* `go_cpu_classes_gc_total_cpu_seconds_total`: 68,983.88
+* `go_cpu_classes_gc_mark_assist_cpu_seconds_total`: 20,255.61
+
+**Analysis:** The Prometheus telemetry provides data-backed proof of severe Garbage Collection churn. A staggering 41.25% of all CPU time consumed by the API server (68,983 out of 167,217 seconds) was spent on Garbage Collection. Crucially, 20,255 CPU seconds were spent on "Mark Assists." This means the allocation rate outpaced dedicated GC workers, forcing the Go runtime to hijack the goroutines serving the `LIST pods` HTTP requests to help sweep memory. This request-thread starvation perfectly explains the massive `runtime.selectgo` blocking seen in profiles and confirms the root cause of the 58-second latency breach on `LIST` calls.
 
 ### 4. Spurious Masking Symptom (Teardown Deadlock)
 **Artifact:** `gs://kubernetes-ci-logs/logs/ci-kubernetes-e2e-gce-scale-performance-5000/2064392517519937536/build-log.txt` (Bottom 200 lines)
