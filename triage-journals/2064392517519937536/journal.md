@@ -44,6 +44,15 @@ Knowing the core test failed, I extracted the metrics from `APIResponsivenessPro
 
 **Analysis:** The Prometheus telemetry provides data-backed proof of severe Garbage Collection churn. A staggering 41.25% of all CPU time consumed by the API server (68,983 out of 167,217 seconds) was spent on Garbage Collection. Crucially, 20,255 CPU seconds were spent on "Mark Assists." This means the allocation rate outpaced dedicated GC workers, forcing the Go runtime to hijack the goroutines serving the `LIST pods` HTTP requests to help sweep memory. This request-thread starvation perfectly explains the massive `runtime.selectgo` blocking seen in profiles and confirms the root cause of the 58-second latency breach on `LIST` calls.
 
+```mermaid
+pie title API Server CPU Time Breakdown (Seconds)
+    "GC: Mark Assist (Thread Hijack)" : 20255.61
+    "GC: Dedicated Workers" : 26418.06
+    "GC: Idle Workers" : 22210.39
+    "GC: Stop-the-world Pauses" : 99.81
+    "Non-GC Processing" : 98233.61
+```
+
 ### 4. Spurious Masking Symptom (Teardown Deadlock)
 **Artifact:** `gs://kubernetes-ci-logs/logs/ci-kubernetes-e2e-gce-scale-performance-5000/2064392517519937536/build-log.txt` (Bottom 200 lines)
 **Evidence:** The teardown script hangs and exits with `255` because the load balancer backend service has locked the control plane instance group manager.
