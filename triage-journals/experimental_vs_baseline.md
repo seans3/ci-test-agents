@@ -29,13 +29,15 @@ The experimental configuration explicitly set `CL2_RESTART_APISERVER: true`. Whe
 When a `client-go` Reflector loses its `WATCH` stream, its fallback mechanism is to issue a full, unpaginated `LIST` call to re-sync its cache. Because the restarts severed thousands of watches simultaneously, it triggered an uncontrollable "Thundering Herd" of reconnects.
 
 *   **Baseline `LIST pods` (Cluster Scope):**
-    *   Call Count: 384
+    *   Call Count: 384 (Spread organically over 2 hours)
     *   99th Percentile Latency: **29.9 seconds**
 *   **Experimental `LIST pods` (Cluster Scope):**
-    *   Call Count: 424
+    *   Call Count: 424 (Synchronized wave triggered by restarts)
     *   99th Percentile Latency: **42.63 seconds** (Severely breached 30s SLO)
 
-**Analysis:** The 3-node HA control plane was hit by a synchronized wave of `LIST pods` requests from the entire 5,000-node cluster the moment the API servers came back online.
+**Analysis:** A superficial glance at the metrics suggests only a ~10% increase in total `LIST` requests (from 384 to 424), which does not intuitively explain a massive failure. However, analyzing *cumulative counts* obscures the true destructive force: **concurrency**. 
+
+In the baseline run, the 384 `LIST` requests occurred organically and were spread out over the 2-hour duration of the test. In the experimental run, because we intentionally restarted the API servers, thousands of active `WATCH` connections were severed simultaneously. This caused all connected controllers and clients to execute their fallback `LIST pods` calls **at the exact same second** when the API servers came back online. Each of these unpaginated global `LIST` calls generates a massive ~35MB JSON payload. The control plane was forced to serialize and transmit hundreds of these 35MB payloads concurrently.
 
 ---
 
