@@ -50,7 +50,7 @@ The failure explicitly occurred on the `LIST` verb for `pods` at the `cluster` s
 * `go_cpu_classes_gc_total_cpu_seconds_total`: 55,802.06
 * `go_cpu_classes_gc_mark_assist_cpu_seconds_total`: 15,844.41
 
-**Analysis:** The Prometheus telemetry provides data-backed proof of severe Garbage Collection churn induced by the nearly 9x allocation spike. A staggering 39.6% of all CPU time consumed by the API server (55,802 out of 140,709 seconds) was spent on Garbage Collection.
+**Analysis:** The Prometheus telemetry provides data-backed proof of severe Garbage Collection churn induced by the nearly 9x allocation spike. It is important to note that these metrics are cumulative counters over the entire lifetime of the API server process during this test run. Over that entire cumulative lifespan, a staggering 39.6% of all CPU time consumed by the API server (55,802 out of 140,709 seconds) was spent on Garbage Collection.
 
 To visualize this CPU starvation, the following chart breaks down the total GC time. Crucially, as the chart shows, 15,844 CPU seconds were spent on "Mark Assists." This specific metric confirms that the allocation rate outpaced dedicated GC workers, forcing the Go runtime to hijack the goroutines serving the `LIST pods` HTTP requests to help sweep memory. This request-thread starvation perfectly explains the massive latency breach on `LIST` calls.
 
