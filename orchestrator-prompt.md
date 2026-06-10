@@ -57,4 +57,14 @@ You must understand the following strict directory topology to locate files quic
 4.  **Save the Triage Journal (Permanent Storage)**:
     The final, synthesized root-cause reports from your sub-agents are NOT temporary. You must save their final output to a canonical, permanent location within your workspace.
     *   Create a directory for the build: `mkdir -p ./triage-journals/[BUILD_ID]/`
-    *   Write the combined triage report (including all log evidence, test suite proofs, and .pprof hypotheses) into `./triage-journals/[BUILD_ID]/journal.md`.
+    *   Write the combined triage report into `./triage-journals/[BUILD_ID]/journal.md`.
+
+    **MANDATORY JOURNAL FORMAT**:
+    The `journal.md` file MUST follow this structure:
+    *   **Header**: Include the Build ID, Status, and a human-readable **Completion Time** (convert the Unix `timestamp` found in `finished.json` to a standard UTC date/time string).
+    *   **Executive Summary**: A brief (1-3 sentence) summary at the very beginning stating the identified root cause of the failure.
+    *   **Triage Narrative**: A step-by-step narrative describing the entire debug process. You must explain your reasoning: why you looked at a certain file, what that file indicated, and why that clue led you to the next step (e.g., "Because the junit.xml showed 2 failures, it indicated the teardown timeout was a secondary symptom, leading us to examine the Prometheus metrics...").
+    *   **Supporting Evidence**: Within the narrative, you MUST include the exact details of the artifacts used:
+        *   The exact filepath/URI of the artifact.
+        *   Where in the file the evidence exists (if applicable).
+        *   The exact literal log entries, XML tags, or metric JSON payloads used to substantiate the findings.
