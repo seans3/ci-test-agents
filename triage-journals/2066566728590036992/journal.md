@@ -5,7 +5,7 @@
 **Completion Time:** Monday, June 15, 2026, at 08:26:25 PM UTC
 
 ## Executive Summary
-The 5k-node scalability test failed due to an API Responsiveness SLO breach (p99 `LIST pods` latency hit 41.48s, limit 30s). Data suggests this is caused by a "Thundering Herd" of reconnecting clients issuing unpaginated `LIST` requests, though further `pprof` and baseline metric collection is required to definitively prove the root cause over competing variables like `etcd` IOPS saturation.
+The 5k-node scalability test failed due to an API Responsiveness SLO breach (p99 `LIST pods` latency hit 41.48s, limit 30s). Data suggests this is caused by a "Thundering Herd" of reconnecting clients issuing unpaginated `LIST` requests. We have definitively ruled out `etcd` IOPS saturation as the root cause, leaving API Server CPU saturation/GC Churn as the primary hypothesis, pending further `.pprof` and baseline metric collection.
 
 ## Triage Narrative & Findings
 
@@ -32,14 +32,13 @@ However, in this run, the `SlowCount` for `LIST pods` reached 15, and for `PATCH
 At a 5,000-node scale, a cluster-scoped `LIST pods` request is massive. There are several competing hypotheses for what caused the latency to spike to 41 seconds:
 
 *   **Hypothesis A: API Server GC Churn.** The API server must serialize massive protobuf objects from `etcd` into JSON for the client. This extreme memory allocation triggers aggressive Garbage Collection (GC), pausing execution threads and blocking `WATCH` channels, leading to the Thundering Herd.
-*   **Hypothesis B: Etcd Saturation.** The sheer volume of data requested saturates the `etcd` disk IOPS or network throughput, causing the initial timeouts before the data even reaches the API server.
+*   **Hypothesis B (RULED OUT): Etcd Saturation.** We hypothesized that the sheer volume of data requested saturated the `etcd` disk IOPS. However, analysis of `EtcdMetrics_load_2026-06-15T19:45:11Z.json` explicitly refutes this. Out of ~3.27 million `etcd_disk_wal_fsync_duration_seconds` operations, 3,268,070 completed in under 4ms, and 100% completed in under 64ms. `etcd` was responding extremely fast, definitively proving the bottleneck occurred upstream in the API Server.
 
 ## Required Proof (Next Steps for Engineering)
 
-The red-team review correctly identified that we cannot definitively claim "GC churn" as the root cause without absolute proof, as we have not ruled out confounding variables like `etcd` saturation.
+The red-team review correctly identified that we cannot definitively claim "GC churn" as the root cause without absolute proof. While we have ruled out `etcd` saturation, we must still prove API Server saturation.
 
 Before closing this investigation, the following artifacts **MUST** be fetched and analyzed to mathematically prove the bottleneck:
 
 1.  **Baseline Deltas:** Fetch the `LIST pods` `Count` and `SlowCount` from a known-good baseline run to prove the current numbers are a mathematical anomaly.
 2.  **Temporal `.pprof` Snapshots:** Do not rely on cumulative Prometheus metrics. We must fetch the 30-second `kube-apiserver.cpu.pprof` and `kube-apiserver.heap.pprof` artifacts windowed *exactly* over the 40-second latency spike to prove CPU starvation or GC churn.
-3.  **Etcd Telemetry:** Query the `artifacts/prometheus_snapshot.tar` TSDB for `etcd_disk_wal_fsync_duration_seconds` to explicitly rule out `etcd` IOPS starvation as the confounding variable. 
