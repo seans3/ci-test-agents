@@ -1,39 +1,51 @@
-# Architecture Proposal & Red-Team Analysis: Autonomous Triage Agent for kubernetes/perf-tests
+# Architecture Proposal: Autonomous Triage Agent for kubernetes/perf-tests
 
-## 1. Overview of Proposed Architecture
-The proposed architecture outlines an autonomous, LLM-driven "Release Shepherd Agent" tailored for the `kubernetes/perf-tests` repository. It is designed to triage 5k-node scalability test failures (driven by ClusterLoader2) by pulling Prometheus metrics, parsing logs, and identifying culprit commits. It features GitOps integration via Prow (`/triage-perf`, `/verify-perf-fix`) and utilizes Kubemark for cheap, automated rollback verification.
+## Overview
+Implementing an autonomous triage agent for the upstream `kubernetes/perf-tests` repository (specifically targeting the massive 5k-node scalability and density tests driven by ClusterLoader2) is highly viable. 
 
-## 2. Red-Team Critique: Operational and Deployment Gaps
+Because a single 5k-node test run takes hours and generates massive log files, Prometheus metrics, and etcd data, manual triage of failures is incredibly taxing. This proposal outlines a robust, secure, and cost-effective "Release Shepherd Agent" that integrates deeply into the Kubernetes CI/CD stack.
 
-While the high-level logic (Flake -> Blame -> Verify) is sound, a red-team analysis of the deployment realities reveals critical gaps in execution, security, and data management.
+This architecture incorporates critical operational realities, ensuring the system can handle 55GB+ log payloads, protect against malicious code execution, and prevent LLM context-window exhaustion.
 
-### Gap A: Execution Environment (Where does this actually run?)
-The architecture diagram glosses over the physical compute requirements.
-*   **The Reality:** Filtering 55GB of logs and orchestrating a Kubemark cluster cannot run inside a lightweight GitHub Action runner or a standard Prow Job pod (which typically have strict CPU/Memory limits and short timeouts).
-*   **The Gap:** If the "Data Parser" runs inside a standard Prow pod, it will OOM-kill when attempting to stream `kube-apiserver.log`. If it orchestrates Kubemark, the pod will timeout before the 3-hour Kubemark test completes.
-*   **Required Fix:** The triage agent must be decoupled into an asynchronous, stateful control plane. Prow should only trigger an external orchestration cluster (e.g., a dedicated Kubernetes cluster running Argo Workflows or Temporal) that has attached high-IOPS scratch disks for log processing and long-lived pods to monitor the Kubemark execution.
+---
 
-### Gap B: Artifact Retention and Temporal Skew
-The architecture assumes all artifacts are immediately available upon test failure.
-*   **The Reality:** The 5k-node tests often fail abruptly (e.g., infrastructure teardown panics), meaning the final Prometheus snapshot (`prometheus_snapshot.tar`) or `.pprof` files may not have been successfully uploaded to the GCS bucket.
-*   **The Gap:** If the agent blindly requests the snapshot and it isn't there, the LangChain workflow will crash. Furthermore, the agent assumes the "last green run" is easily comparable, but Kubernetes is a fast-moving target; a baseline from 3 weeks ago may have fundamentally different metric topologies due to upstream API changes.
-*   **Required Fix:** The agent must gracefully degrade. If TSDB snapshots are missing, it must fall back to instant-vector JSON metrics. For baselines, it must enforce a strict temporal window (e.g., "baseline must be within the last 5 days") or abort the comparison.
+## Pillar 1: Asynchronous, Stateful Orchestration
+A standard GitHub Action or Prow Job pod is insufficient for 5k-node triage due to strict CPU/Memory limits and short timeouts.
 
-### Gap C: Security and the Confused Deputy Problem
-The architecture proposes `/verify-perf-fix #12345` as a Prow slash command.
-*   **The Reality:** PR #12345 contains arbitrary code submitted by an external contributor.
-*   **The Gap:** If the triage agent automatically pulls PR code and spins up a Kubemark cluster in a privileged Google Cloud environment based on a GitHub comment, it is vulnerable to a "Confused Deputy" attack. A malicious contributor could introduce a cryptocurrency miner or exfiltrate GCP credentials, using the agent to execute the payload.
-*   **Required Fix:** The agent MUST verify that the user issuing `/verify-perf-fix` is an authorized org member (`/lgtm` equivalent). Furthermore, the Kubemark sandbox must run in a deeply isolated, credential-less GCP project with absolutely no egress to the internet.
+*   **Decoupled Control Plane:** Prow acts solely as the trigger. When a 5k periodic job fails, a Prow Webhook triggers an external, stateful orchestration cluster (e.g., Argo Workflows or Temporal).
+*   **Heavy Compute Nodes:** The orchestration pods are provisioned with large scratch disks (e.g., 500GB SSDs) and have no restrictive API timeouts, allowing them to safely download, stream, and process massive GCS artifacts and orchestrate long-running sandbox verifications.
 
-### Gap D: The Cost of API Context Windows
-The MVP stack suggests using `gpt-4o` or `Claude-3.5-Sonnet`.
-*   **The Reality:** Even aggressively filtered `kube-apiserver` panics or Prometheus metric dumps can span tens of thousands of tokens.
-*   **The Gap:** Pumping 50,000 tokens of raw metrics into an LLM for every failing 5k test run will result in massive API costs and frequent context-window exhaustion (resulting in truncation and hallucination).
-*   **Required Fix:** The architecture must incorporate deterministic pre-processing. A Python script should mathematically calculate the metric deltas (Failed Run vs. Baseline) and only feed the *anomalies* (e.g., "LIST pods increased by 30%") to the LLM. The LLM should be used for reasoning, not data parsing.
+## Pillar 2: Deterministic Data Collection & Pre-Processing
+LLMs are highly expensive and prone to hallucination when fed tens of thousands of tokens of raw log data. Data must be strictly pre-processed.
 
-## 3. Revised Reference Architecture
+*   **Zero-Memory Streaming:** The agent uses Unix pipes (`gcloud storage cat ... | grep`) to extract only errors, panics, and SLO breaches, never loading raw `kube-apiserver` or `build-log` files entirely into memory.
+*   **Mathematical Deltas:** Instead of feeding raw TSDB metrics to the LLM, a deterministic Python pre-processor calculates the deltas between the failed run and a known-good baseline (e.g., "LIST pods increased by 30%"). Only the *calculated anomalies* are fed to the LLM context.
+*   **Graceful Degradation:** 5k tests often fail abruptly, meaning final `prometheus_snapshot.tar` or `.pprof` artifacts may not be uploaded. The agent is programmed to gracefully degrade to instant-vector JSON metrics or `build-log.txt` parsing if high-fidelity artifacts are missing.
 
-To address these gaps, the architecture should be updated as follows:
+## Pillar 3: Core LLM/Agent Logic (The Triage Engine)
+Using an open-source framework (like LangChain) and a capable reasoning model (e.g., `gpt-4o`, `Claude-3.5-Sonnet`, or `Llama-3`), the agent executes a structured analysis loop:
+
+1.  **Flakiness vs. Regression Analysis:** The agent cross-references the failure signature against infrastructure logs. If the core test (`junit.xml`) passed but the cluster failed to delete due to GCE quota limits, it flags the run as an **Infrastructure Flake** and adds an automated `/retest` or `/skip-blocking` comment.
+2.  **Culprit Pinpointing (The "Blame" Engine):** For real regressions, the agent extracts the failure signature (e.g., API server lock contention) and analyzes the Git commit window since the last green run. It correlates the technical failure (e.g., caching logic) with specific PRs merged in that window.
+3.  **Red-Team Verification:** Before posting any findings, a secondary, adversarial "Red-Team" prompt evaluates the draft to ensure no categorical claims are made without absolute metric proof, preventing the bot from spamming PRs with false accusations.
+
+## Pillar 4: Secure Automated Sandbox Verification (Kubemark)
+Spinning up a real 5k-node GCE/AWS cluster to verify a rollback is extremely expensive and slow. The agent instead uses **Kubemark** to simulate control-plane load cheaply.
+
+*   **The Workflow:** The agent creates a temporary branch, reverts the suspected culprit PR, launches a 5k Kubemark test run, and monitors if the SLO metrics return to normal.
+*   **Security (Preventing Confused Deputy):** Because this process executes arbitrary code from a PR, it is heavily secured.
+    *   **RBAC:** The agent verifies that the user issuing the command is an authorized org member (equivalent to `/lgtm` permissions).
+    *   **Network Isolation:** The Kubemark sandbox executes in a deeply isolated, credential-less GCP project (VPC) with absolutely no internet egress, preventing crypto-mining or data exfiltration attacks.
+
+## Pillar 5: Open Source Interaction Interface (Prow Plugin)
+Maintainers interact with the agent directly where they work—on GitHub PRs and Issues—via a custom Prow bot plugin.
+
+*   `/triage-perf`: Forces the agent to re-analyze the Prometheus and log dumps for the current PR or issue.
+*   `/verify-perf-fix #12345`: Instructs the agent to securely run a Kubemark test with PR #12345 applied to see if it resolves the documented performance degradation.
+
+---
+
+## Reference Architecture Diagram
 
 ```text
 [ GitHub PR / Prow ] ──(Webhook + Auth Check)──> [ External Triage Control Plane (Argo/Temporal) ]
@@ -48,9 +60,11 @@ To address these gaps, the architecture should be updated as follows:
  - Stream GCS logs to disk                        - Ingest filtered anomalies             - Triggered ONLY by core maintainers
  - Use jq/grep to extract errors                  - Identify Flake vs. Regression         - Runs Kubemark in credential-less GCP VPC
  - Calculate math deltas against baseline         - Draft Culprit Hypothesis              - Returns test exit code to Orchestrator
+ - Graceful degradation on missing data                     │                                        │
        │                                                    │                                        │
        └────────────────────────────────────────────────────┴────────────────────────────────────────┘
                                                             ▼
                                                [ Final Review & GitHub Post ]
+                                               - Red-Team Critique
                                                - Post Markdown Report to PR
 ```
