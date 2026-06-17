@@ -1,70 +1,52 @@
-# Architecture Proposal: Autonomous Triage Agent for kubernetes/perf-tests
+# Architecture Proposal: Local-First Triage Agent Swarm for kubernetes/perf-tests
 
 ## Overview
-Implementing an autonomous triage agent for the upstream `kubernetes/perf-tests` repository (specifically targeting the massive 5k-node scalability and density tests driven by ClusterLoader2) is highly viable. 
+Implementing a fully automated, CI-integrated triage agent for the upstream `kubernetes/perf-tests` repository (specifically the 5k-node scalability tests) involves significant infrastructure friction. Changing the CI/CD pipeline (Prow, Argo, sandboxes) requires widespread consensus and dedicated compute resources.
 
-Because a single 5k-node test run takes hours and generates massive log files, Prometheus metrics, and etcd data, manual triage of failures is incredibly taxing. This proposal outlines a robust, secure, and cost-effective "Release Shepherd Agent" that integrates deeply into the Kubernetes CI/CD stack.
+To enable immediate, high-impact adoption without requiring *any* changes to the existing CI infrastructure, we propose a **"Low-Resource, Local-First" Architecture**. 
 
-This architecture incorporates critical operational realities, ensuring the system can handle 55GB+ log payloads, protect against malicious code execution, and prevent LLM context-window exhaustion.
-
----
-
-## Pillar 1: Asynchronous, Stateful Orchestration
-A standard GitHub Action or Prow Job pod is insufficient for 5k-node triage due to strict CPU/Memory limits and short timeouts.
-
-*   **Decoupled Control Plane:** Prow acts solely as the trigger. When a 5k periodic job fails, a Prow Webhook triggers an external, stateful orchestration cluster (e.g., Argo Workflows or Temporal).
-*   **Heavy Compute Nodes:** The orchestration pods are provisioned with large scratch disks (e.g., 500GB SSDs) and have no restrictive API timeouts, allowing them to safely download, stream, and process massive GCS artifacts and orchestrate long-running sandbox verifications.
-
-## Pillar 2: Deterministic Data Collection & Pre-Processing
-LLMs are highly expensive and prone to hallucination when fed tens of thousands of tokens of raw log data. Data must be strictly pre-processed.
-
-*   **Zero-Memory Streaming:** The agent uses Unix pipes (`gcloud storage cat ... | grep`) to extract only errors, panics, and SLO breaches, never loading raw `kube-apiserver` or `build-log` files entirely into memory.
-*   **Mathematical Deltas:** Instead of feeding raw TSDB metrics to the LLM, a deterministic Python pre-processor calculates the deltas between the failed run and a known-good baseline (e.g., "LIST pods increased by 30%"). Only the *calculated anomalies* are fed to the LLM context.
-*   **Graceful Degradation:** 5k tests often fail abruptly, meaning final `prometheus_snapshot.tar` or `.pprof` artifacts may not be uploaded. The agent is programmed to gracefully degrade to instant-vector JSON metrics or `build-log.txt` parsing if high-fidelity artifacts are missing.
-
-## Pillar 3: Core LLM/Agent Logic (The Triage Engine)
-Using an open-source framework (like LangChain) and a capable reasoning model (e.g., `gpt-4o`, `Claude-3.5-Sonnet`, or `Llama-3`), the agent executes a structured analysis loop:
-
-1.  **Flakiness vs. Regression Analysis:** The agent cross-references the failure signature against infrastructure logs. If the core test (`junit.xml`) passed but the cluster failed to delete due to GCE quota limits, it flags the run as an **Infrastructure Flake** and adds an automated `/retest` or `/skip-blocking` comment.
-2.  **Culprit Pinpointing (The "Blame" Engine):** For real regressions, the agent extracts the failure signature (e.g., API server lock contention) and analyzes the Git commit window since the last green run. It correlates the technical failure (e.g., caching logic) with specific PRs merged in that window.
-3.  **Red-Team Verification:** Before posting any findings, a secondary, adversarial "Red-Team" prompt evaluates the draft to ensure no categorical claims are made without absolute metric proof, preventing the bot from spamming PRs with false accusations.
-
-## Pillar 4: Secure Automated Sandbox Verification (Kubemark)
-Spinning up a real 5k-node GCE/AWS cluster to verify a rollback is extremely expensive and slow. The agent instead uses **Kubemark** to simulate control-plane load cheaply.
-
-*   **The Workflow:** The agent creates a temporary branch, reverts the suspected culprit PR, launches a 5k Kubemark test run, and monitors if the SLO metrics return to normal.
-*   **Security (Preventing Confused Deputy):** Because this process executes arbitrary code from a PR, it is heavily secured.
-    *   **RBAC:** The agent verifies that the user issuing the command is an authorized org member (equivalent to `/lgtm` permissions).
-    *   **Network Isolation:** The Kubemark sandbox executes in a deeply isolated, credential-less GCP project (VPC) with absolutely no internet egress, preventing crypto-mining or data exfiltration attacks.
-
-## Pillar 5: Open Source Interaction Interface (Prow Plugin)
-Maintainers interact with the agent directly where they work—on GitHub PRs and Issues—via a custom Prow bot plugin.
-
-*   `/triage-perf`: Forces the agent to re-analyze the Prometheus and log dumps for the current PR or issue.
-*   `/verify-perf-fix #12345`: Instructs the agent to securely run a Kubemark test with PR #12345 applied to see if it resolves the documented performance degradation.
+This approach brings the triage swarm directly to the performance engineer's local environment. It relies on standard CLI tools, zero-memory data streaming, persistent local history, and a library of portable agent skills that can be executed on a standard developer laptop.
 
 ---
 
-## Reference Architecture Diagram
+## Pillar 1: Foundational Skills (Portable Procedural Knowledge)
+Instead of hardcoding logic into a monolithic bot, triage logic is decoupled into atomic, portable "Skills" (packaged as `.skill` files). These skills provide procedural guardrails that any generic LLM CLI agent can ingest dynamically.
 
-```text
-[ GitHub PR / Prow ] ──(Webhook + Auth Check)──> [ External Triage Control Plane (Argo/Temporal) ]
-                                                            │
-                                                            ▼
-                                                [ Stateful Orchestrator Pod ]
-                                         (Has 500GB Scratch Disk, No API Timeouts)
-                                                            │
-       ┌────────────────────────────────────────────────────┼────────────────────────────────────────┐
-       ▼                                                    ▼                                        ▼
-[Deterministic Filter Phase]                      [Heuristic Reasoner (LLM)]              [Isolated Sandbox Phase]
- - Stream GCS logs to disk                        - Ingest filtered anomalies             - Triggered ONLY by core maintainers
- - Use jq/grep to extract errors                  - Identify Flake vs. Regression         - Runs Kubemark in credential-less GCP VPC
- - Calculate math deltas against baseline         - Draft Culprit Hypothesis              - Returns test exit code to Orchestrator
- - Graceful degradation on missing data                     │                                        │
-       │                                                    │                                        │
-       └────────────────────────────────────────────────────┴────────────────────────────────────────┘
-                                                            ▼
-                                               [ Final Review & GitHub Post ]
-                                               - Red-Team Critique
-                                               - Post Markdown Report to PR
-```
+Examples of foundational skills created for this endeavor:
+*   **`cl2-artifacts-reference`**: Provides the exact GCS bucket topologies and parsing rules for ClusterLoader2 outputs.
+*   **`flakiness-triage`**: Establishes strict rules for differentiating between infrastructure teardown deadlocks and genuine code regressions.
+*   **`journaling-execution-memory`**: Forces the agent to maintain an externalized scratchpad of its hypotheses, preventing context-window decay.
+
+## Pillar 2: Specialized Triage Agents (The Swarm)
+Rather than using a single, massive context window to process 55GB of logs, the architecture employs a swarm of narrowly focused sub-agents. 
+
+When invoked by the local orchestrator, these agents ingest specific, pre-filtered snippets:
+*   **`metrics-expert`**: Correlates Prometheus JSON summaries and identifies anomalies like the "Thundering Herd" or SLO breaches.
+*   **`control-plane-expert`**: Analyzes specific API server errors (`context deadline exceeded`, `HTTP 429`) and Go panics.
+*   **`infra-expert`**: Investigates GCP provisioning and `kubetest2` teardown failures.
+*   **`red-team-reviewer`**: An adversarial agent that prevents the orchestrator from making categorical claims without absolute proof.
+
+## Pillar 3: Historical Context & Local Memory
+To triage effectively, agents need a baseline. Analyzing a single run in isolation often leads to false positives. 
+
+*   **Local Synthesis Database:** After triaging a run (whether it passed or failed), the orchestrator saves a highly compressed, synthesized JSON summary of the run's key metrics, exit codes, and failure signatures to a local directory (e.g., `~/.k8s-triage-history/`).
+*   **Automated Baselining:** When analyzing a new failure, the agent queries this local history to mathematically prove deltas (e.g., "The local history shows successful runs average 400 LIST calls; this failed run had 581, representing a 45% abnormal surge").
+*   **Trend Analysis:** By storing historical signatures, the agent can instantly tell the engineer if the current failure is a known, repeating flake or a novel hard regression.
+
+## Pillar 4: Engineer-Driven Local Execution (Zero-Infrastructure)
+The core of this architecture is the execution model. It runs entirely on the performance engineer's local machine, requiring zero integration with Prow or GitHub webhooks.
+
+1.  **Manual Trigger:** An engineer notices a 5k-node test failure on the Perfdash dashboard.
+2.  **Local Execution:** The engineer opens their terminal and executes the local master orchestrator (e.g., `gemini -f orchestrator-prompt.md`).
+3.  **Zero-Memory Streams:** The local orchestrator uses the engineer's existing credentials (`gcloud auth`) to stream data. Crucially, it uses Unix pipes (`gcloud storage cat ... | grep`) to pull *only* the matching error signatures down to the local `/tmp/k8s-triage/` directory. This avoids downloading 55GB of logs.
+4.  **Local Delegation & History Lookup:** The orchestrator queries the local history database (Pillar 3) to establish a baseline, then delegates the filtered data to the specialized agents (Pillar 2).
+5.  **Final Output:** A detailed, red-team-verified `journal.md` is generated directly on the engineer's filesystem, ready to be copy-pasted into a GitHub Issue or PR.
+
+---
+
+## Advantages of the Local-First Approach
+
+1.  **Zero CI Friction:** Requires no approval from SIG-Testing, no custom Prow plugins, and no dedicated Kubernetes orchestration clusters.
+2.  **Historical Intelligence:** Local storage of compressed run data gives the agent superhuman memory for spotting flakes and establishing mathematical baselines without re-downloading old GCS artifacts.
+3.  **Immediate Adoption:** Engineers can install the `.skill` files and start using the agent today.
+4.  **Security by Default:** Because it runs locally using the engineer's own credentials, there is no "Confused Deputy" risk associated with bots automatically executing code from PRs in the cloud.
