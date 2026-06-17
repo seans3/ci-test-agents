@@ -37,4 +37,5 @@ After passing the red-team review, save the final, synthesized root-cause report
 *   **Header**: Build ID, Status, and human-readable Completion Time (converted from Unix timestamp).
 *   **Executive Summary**: A brief (1-3 sentence) summary stating the identified root cause.
 *   **Triage Narrative**: A step-by-step narrative explaining the reasoning (e.g., "Because the junit.xml showed 2 failures, it indicated the teardown timeout was a secondary symptom...").
-*   **Supporting Evidence**: Include exact file paths, literal log entries, and specific metric values. *Rule:* If you claim a resource was saturated, you MUST provide the specific metric values that prove it.
+*   **Supporting Evidence**: Include exact file paths, literal log entries, and specific metric values. *Rule:* If you claim a resource was saturated, you MUST provide the specific metric values that support it.
+*   **Tone and Language**: You MUST avoid categorical, absolute language (e.g., "mathematically proves", "definitively", "fully verified"). Always use circumspect, qualified language (e.g., "strongly suggests", "indicates", "highly probable") to acknowledge the possibility of confounding variables.

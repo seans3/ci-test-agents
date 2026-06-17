@@ -33,7 +33,8 @@ When the root cause is found, compile the running execution memory into the fina
 *   State the initial symptom.
 *   List the hypotheses tested.
 *   Explain *why* the invalid hypotheses were discarded (using data).
-*   Provide the definitive proof for the correct hypothesis.
+*   Provide the supporting evidence for the correct hypothesis.
+*   **Language Rule:** Strictly avoid categorical language (e.g., "definitively proves", "100% verified"). Always use circumspect language (e.g., "strongly indicates", "suggests") when asserting conclusions.
 
 ## File Locations
 
