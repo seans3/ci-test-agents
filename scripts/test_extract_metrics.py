@@ -47,7 +47,18 @@ class TestExtractMetrics(unittest.TestCase):
         self.assertEqual(result, {})
 
     def test_extract_api_count_success(self):
-        data = {"metric": "Verb:LIST Scope:cluster Latency:blah Count:581 SlowCount:15"}
+        data = {
+            "dataItems": [
+                {
+                    "labels": {
+                        "Resource": "pods",
+                        "Scope": "cluster",
+                        "Verb": "LIST",
+                        "Count": "581"
+                    }
+                }
+            ]
+        }
         count = extract_metrics.extract_api_count(data)
         self.assertEqual(count, 581)
 

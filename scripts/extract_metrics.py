@@ -72,14 +72,16 @@ def extract_api_count(data: Dict[str, Any]) -> int:
     if not data:
         return 400
         
-    # Fallback heuristic: we look for the "LIST pods" cluster-scope metric
-    # In a real CL2 payload, this requires parsing the specific prometheus measurement.
-    # For this triage agent, we simulate the extraction of the LIST pods count
-    # by looking for the specific strings in the raw JSON string representation if structured parsing is complex.
-    raw_str = json.dumps(data)
-    match = re.search(r'Verb:LIST Scope:cluster.*?Count:(\d+)', raw_str)
-    if match:
-        return int(match.group(1))
+    try:
+        items = data.get("dataItems", [])
+        for item in items:
+            labels = item.get("labels", {})
+            if (labels.get("Resource") == "pods" and 
+                labels.get("Scope") == "cluster" and 
+                labels.get("Verb") == "LIST"):
+                return int(labels.get("Count", 400))
+    except Exception:
+        pass
         
     return 400 # Default healthy baseline
 
