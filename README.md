@@ -40,7 +40,11 @@ The swarm is entirely self-contained within the `gemini` CLI environment.
 
 ### Prerequisites
 1.  **Install the Gemini CLI**: Ensure the `gemini` CLI is available in your `$PATH`.
-2.  **Install Python Dependencies**: The visualization scripts require `matplotlib`, `seaborn`, and `pandas`.
+2.  **Establish the Python Environment**: The visualization scripts require a dedicated virtual environment with `matplotlib`, `seaborn`, and `pandas`. You MUST create this environment before executing the swarm:
+    ```bash
+    python3 -m venv .venv
+    .venv/bin/pip install -r requirements.txt
+    ```
 3.  **GCP Authentication**: The swarm requires read access to the public Kubernetes CI bucket.
     ```bash
     gcloud auth login

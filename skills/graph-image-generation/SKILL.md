@@ -20,7 +20,7 @@ Before running the visualization script, you must curate the extracted TSDB metr
 Invoke the `scripts/generate_dashboard.py` script.
 *   **DO** pass the run-specific JSON payload file as the first argument.
 *   **DO** pass the desired output directory (e.g., `triage-journals/[BUILD_ID]/visualizations`) as the second argument.
-*   *Example Command:* `python3 scripts/generate_dashboard.py triage-journals/12345/metrics.json triage-journals/12345/visualizations`
+*   *Example Command:* `.venv/bin/python3 scripts/generate_dashboard.py triage-journals/12345/metrics.json triage-journals/12345/visualizations`
 
 ## 3. Embed in the Newspaper Layout
 Once the script successfully generates the 5 `.png` dimensions, you must embed them directly into the final `journal.md` report.
