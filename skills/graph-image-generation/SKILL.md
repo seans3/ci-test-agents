@@ -25,5 +25,6 @@ Invoke the `scripts/generate_dashboard.py` script.
 ## 3. Embed in the Newspaper Layout
 Once the script successfully generates the 5 `.png` dimensions, you must embed them directly into the final `journal.md` report.
 *   **DO NOT** dump all the images at the end of the report.
-*   **DO** intersperse them. Place `dim1_concurrency.png` immediately after discussing the traffic anomaly. Place the CPU and Memory graphs immediately after discussing the lock contention or GC churn.
+*   **DO Elevate Core Evidence:** Identify the 1-2 most informative graphs that definitively prove the root cause (e.g., the Concurrency Surge and CPU Saturation graphs for an overload failure). Embed these directly into the **Executive Summary** at the very top of the file so they are visible immediately "above the fold."
+*   **DO** intersperse the remaining graphs. Place them immediately after discussing the relevant metric or hypothesis in the deep-dive sections. Use cross-references if a graph was already shown in the Executive Summary.
 *   **DO** use standard Markdown image tags: `![Dimension 1: Concurrency Surge](./visualizations/dim1_concurrency.png)`.
