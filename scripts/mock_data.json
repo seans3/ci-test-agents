@@ -1,0 +1,153 @@
+{
+  "metadata": {
+    "failed_build_id": "2066566728590036992",
+    "baseline_build_id": "2065841946538020864",
+    "failure_timestamp_utc": "2026-06-15T19:45:10Z",
+    "t_zero_definition": "APIResponsiveness SLO Breach (LIST pods)"
+  },
+  "hardware_limits": {
+    "kube_apiserver_memory_limit_gb": 64.0
+  },
+  "time_series_data": [
+    {
+      "relative_time_seconds": -300,
+      "failed_run": {
+        "concurrency_inflight": 405,
+        "apf_queued": 0,
+        "cpu_total_cores": 12.5,
+        "cpu_gc_cores": 1.5,
+        "memory_working_set_gb": 22.5,
+        "etcd_fsync_buckets": {"0.005": 1100, "0.01": 45, "0.05": 5, "+Inf": 0}
+      },
+      "baseline_run": {
+        "concurrency_inflight": 400,
+        "cpu_total_cores": 12.0
+      }
+    },
+    {
+      "relative_time_seconds": -200,
+      "failed_run": {
+        "concurrency_inflight": 415,
+        "apf_queued": 0,
+        "cpu_total_cores": 12.8,
+        "cpu_gc_cores": 1.6,
+        "memory_working_set_gb": 23.0,
+        "etcd_fsync_buckets": {"0.005": 1150, "0.01": 48, "0.05": 6, "+Inf": 0}
+      },
+      "baseline_run": {
+        "concurrency_inflight": 405,
+        "cpu_total_cores": 12.1
+      }
+    },
+    {
+      "relative_time_seconds": -100,
+      "failed_run": {
+        "concurrency_inflight": 450,
+        "apf_queued": 10,
+        "cpu_total_cores": 14.2,
+        "cpu_gc_cores": 1.8,
+        "memory_working_set_gb": 24.5,
+        "etcd_fsync_buckets": {"0.005": 1250, "0.01": 55, "0.05": 8, "+Inf": 0}
+      },
+      "baseline_run": {
+        "concurrency_inflight": 395,
+        "cpu_total_cores": 11.9
+      }
+    },
+    {
+      "relative_time_seconds": -50,
+      "failed_run": {
+        "concurrency_inflight": 800,
+        "apf_queued": 150,
+        "cpu_total_cores": 25.0,
+        "cpu_gc_cores": 2.5,
+        "memory_working_set_gb": 28.0,
+        "etcd_fsync_buckets": {"0.005": 1500, "0.01": 80, "0.05": 12, "+Inf": 0}
+      },
+      "baseline_run": {
+        "concurrency_inflight": 410,
+        "cpu_total_cores": 12.5
+      }
+    },
+    {
+      "relative_time_seconds": 0,
+      "failed_run": {
+        "concurrency_inflight": 3450,
+        "apf_queued": 1200,
+        "cpu_total_cores": 58.2,
+        "cpu_gc_cores": 5.1,
+        "memory_working_set_gb": 42.5,
+        "etcd_fsync_buckets": {"0.005": 2500, "0.01": 150, "0.05": 20, "+Inf": 0}
+      },
+      "baseline_run": {
+        "concurrency_inflight": 400,
+        "cpu_total_cores": 12.0
+      }
+    },
+    {
+      "relative_time_seconds": 50,
+      "failed_run": {
+        "concurrency_inflight": 3100,
+        "apf_queued": 1500,
+        "cpu_total_cores": 60.5,
+        "cpu_gc_cores": 6.5,
+        "memory_working_set_gb": 48.0,
+        "etcd_fsync_buckets": {"0.005": 2200, "0.01": 140, "0.05": 18, "+Inf": 0}
+      },
+      "baseline_run": {
+        "concurrency_inflight": 390,
+        "cpu_total_cores": 11.8
+      }
+    },
+    {
+      "relative_time_seconds": 100,
+      "failed_run": {
+        "concurrency_inflight": 2800,
+        "apf_queued": 1450,
+        "cpu_total_cores": 59.0,
+        "cpu_gc_cores": 6.0,
+        "memory_working_set_gb": 50.5,
+        "etcd_fsync_buckets": {"0.005": 2000, "0.01": 120, "0.05": 15, "+Inf": 0}
+      },
+      "baseline_run": {
+        "concurrency_inflight": 405,
+        "cpu_total_cores": 12.2
+      }
+    },
+    {
+      "relative_time_seconds": 200,
+      "failed_run": {
+        "concurrency_inflight": 2000,
+        "apf_queued": 1000,
+        "cpu_total_cores": 45.0,
+        "cpu_gc_cores": 4.5,
+        "memory_working_set_gb": 45.0,
+        "etcd_fsync_buckets": {"0.005": 1600, "0.01": 90, "0.05": 10, "+Inf": 0}
+      },
+      "baseline_run": {
+        "concurrency_inflight": 415,
+        "cpu_total_cores": 12.4
+      }
+    },
+    {
+      "relative_time_seconds": 300,
+      "failed_run": {
+        "concurrency_inflight": 1500,
+        "apf_queued": 500,
+        "cpu_total_cores": 30.0,
+        "cpu_gc_cores": 3.0,
+        "memory_working_set_gb": 35.0,
+        "etcd_fsync_buckets": {"0.005": 1300, "0.01": 60, "0.05": 5, "+Inf": 0}
+      },
+      "baseline_run": {
+        "concurrency_inflight": 395,
+        "cpu_total_cores": 11.9
+      }
+    }
+  ],
+  "pprof_snapshot_t_zero": {
+    "runtime.selectgo_cpu_percent": 52.49,
+    "runtime.lock2_cpu_percent": 15.89,
+    "garbage_collection_cpu_percent": 2.1
+  }
+}
