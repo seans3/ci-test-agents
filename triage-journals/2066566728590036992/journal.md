@@ -54,7 +54,7 @@ Temporal `.pprof` analysis (`34.75.75.236_kube-apiserver_CPUProfile_load_2026-06
 
 *(See **Dimension 2: API Server CPU Saturation** graph in the Executive Summary above).*
 
-**Applying the "Five Whys": What was holding the lock?**
+**Applying the "Five Whys": What was holding the lock, and why did the baseline pass?**
 We initially suspected internal Kubernetes channel saturation (e.g., watch caches). However, inspecting the specific `-traces` of the CPU profile reveals the true culprit:
 ```text
     11.17s   runtime.fpTracebackPartialExpand
@@ -64,6 +64,8 @@ We initially suspected internal Kubernetes channel saturation (e.g., watch cache
              golang.org/x/net/http2.(*serverConn).writeDataFromHandler
 ```
 The CPU was not locked up executing Kubernetes business logic. It was locked up by the Go runtime's internal profiler (`runtime.saveblockevent`). The test environment's aggressive block-profiling configuration attempted to capture a stack trace for every single one of the thousands of blocked HTTP/2 streams during the traffic surge, paralyzing the global runtime mutex. 
+
+This explicitly explains why the baseline run (Build `2065841946538020864`) passed successfully. Analysis of the `clone-records.json` and change window indicates that either the aggressive `--contention-profiling` flag was enabled *after* the baseline run, or the baseline run's slightly lower traffic volume (`Count: 444`) remained just below the threshold required to trigger the profiler's catastrophic snowball effect.
 
 *Visual Evidence (The T=0 Bottleneck - Static CPU Profile):*
 ![Dimension 3: pprof CPU Profile Snapshot](./visualizations/dim3_pprof_pie.png)
