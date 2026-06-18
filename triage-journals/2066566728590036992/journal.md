@@ -92,7 +92,7 @@ The P99 Latency line chart indicates that the vast majority of `etcd` disk syncs
 
 ## Conclusion
 
-Following the Trinary Goal framework, this failure is classified as a **Code Regression**. 
+This failure is classified as a **Code Regression**. 
 
 While the direct mechanical cause of the failure appears to be an "Observer Effect" (the profiler locked the CPU), we must consider *why* the traffic surged by 30% to trigger the profiler. 
 

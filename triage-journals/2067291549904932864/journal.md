@@ -68,7 +68,7 @@ Before concluding that a code regression caused the 119 stream disconnects, we e
 
 ## Conclusion
 
-Following the Trinary Goal framework, this failure is classified as a **Code Regression**. 
+This failure is classified as a **Code Regression**. 
 
 The mechanical bottleneck was the profiler locking the CPU under load, but the root cause of the load (the 26.8% traffic surge from dropped watches) is traced to a code change. Following the First Known Bad (FKB) rule, we must define the suspect window between the LKG build (`99dad60c3508c8337b5c2eab307033fcfe24fb8c`) and the oldest failing build (`9d6e94a40d9a4f6d1e69a77c9074cab5f32104bf`). 
 
