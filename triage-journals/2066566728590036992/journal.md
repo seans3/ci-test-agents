@@ -77,7 +77,12 @@ The memory working set spiked as the inflight requests piled up, but it remained
 ![Dimension 4: Memory Exhaustion](./visualizations/dim4_memory.png)
 
 ### 4. Evaluating Competing Hypotheses
-We investigated whether the sheer volume of data requested saturated the `etcd` disk IOPS, which would cause upstream blocking. However, analysis of `EtcdMetrics_load_2026-06-15T19:45:11Z.json` does not support this. Out of ~3.27 million `etcd_disk_wal_fsync_duration_seconds` operations, 100% completed in under 64ms. `etcd` appears to have been responding extremely fast.
+Before concluding that the `WatchCache` PRs caused the initial stream disconnects (the 137 dropped watches), we must evaluate and rule out other common causes for mass watch drops:
+
+*   **Hypothesis A: Network Partition / Flake:** A momentary network disruption between the API Server and the nodes could sever TCP connections. However, a network partition typically affects a much larger percentage of the cluster simultaneously. Furthermore, the exact same failure signature repeating in the subsequent build makes a transient infrastructure flake highly improbable.
+*   **Hypothesis B: Client-Side Resource Exhaustion:** If the client controllers (kube-controller-manager, scheduler, or kubelets) ran out of CPU/memory and restarted, they would drop their connections. However, our evaluation of the node-level `ResourceUsageSummary` metrics did not show widespread client OOMKills or restarts correlating with the traffic surge.
+*   **Hypothesis C: API Server Restart:** If the API Server pod restarted, all 5,000 watches would drop simultaneously. The metrics explicitly show a delta of only 137 additional dropped watches, indicating the API Server remained active but degraded.
+*   **Hypothesis D: Etcd Disk IOPS Saturation:** We investigated whether the sheer volume of data requested saturated the `etcd` disk IOPS, which would cause upstream blocking. However, analysis of `EtcdMetrics_load_2026-06-15T19:45:11Z.json` does not support this. Out of ~3.27 million `etcd_disk_wal_fsync_duration_seconds` operations, 100% completed in under 64ms. `etcd` appears to have been responding extremely fast.
 
 *Visual Evidence (Etcd Disk IOPS / Storage Health):*
 The P99 Latency line chart indicates that the vast majority of `etcd` disk syncs occurred in under 5ms, well below the 50ms critical threshold.
