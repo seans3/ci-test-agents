@@ -62,8 +62,8 @@ The memory working set spiked as the inflight requests piled up, but it remained
 ![Dimension 4: Memory Exhaustion](./visualizations/dim4_memory.png)
 
 **Etcd Disk IOPS (Storage Health):**
-The heatmap proves that the vast majority of `etcd` disk syncs occurred in under 5ms, well below the 50ms critical threshold. `etcd` was not the bottleneck.
-![Dimension 5: Etcd Disk IOPS Heatmap](./visualizations/dim5_etcd_heatmap.png)
+The P99 Latency line chart proves that the vast majority of `etcd` disk syncs occurred in under 5ms, well below the 50ms critical threshold. `etcd` was not the bottleneck.
+![Dimension 5: Etcd Disk IOPS (P99 Latency)](./visualizations/dim5_etcd_p99.png)
 
 ---
 

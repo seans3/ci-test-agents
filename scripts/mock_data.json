@@ -17,11 +17,12 @@
         "cpu_total_cores": 12.5,
         "cpu_gc_cores": 1.5,
         "memory_working_set_gb": 22.5,
-        "etcd_fsync_buckets": {"0.005": 1100, "0.01": 45, "0.05": 5, "+Inf": 0}
+        "etcd_fsync_p99_ms": 4.08
       },
       "baseline_run": {
         "concurrency_inflight": 400,
-        "cpu_total_cores": 12.0
+        "cpu_total_cores": 12.0,
+        "etcd_fsync_p99_ms": 3.2
       }
     },
     {
@@ -32,11 +33,12 @@
         "cpu_total_cores": 12.8,
         "cpu_gc_cores": 1.6,
         "memory_working_set_gb": 23.0,
-        "etcd_fsync_buckets": {"0.005": 1150, "0.01": 48, "0.05": 6, "+Inf": 0}
+        "etcd_fsync_p99_ms": 4.02
       },
       "baseline_run": {
         "concurrency_inflight": 405,
-        "cpu_total_cores": 12.1
+        "cpu_total_cores": 12.1,
+        "etcd_fsync_p99_ms": 3.2
       }
     },
     {
@@ -47,11 +49,12 @@
         "cpu_total_cores": 14.2,
         "cpu_gc_cores": 1.8,
         "memory_working_set_gb": 24.5,
-        "etcd_fsync_buckets": {"0.005": 1250, "0.01": 55, "0.05": 8, "+Inf": 0}
+        "etcd_fsync_p99_ms": 3.94
       },
       "baseline_run": {
         "concurrency_inflight": 395,
-        "cpu_total_cores": 11.9
+        "cpu_total_cores": 11.9,
+        "etcd_fsync_p99_ms": 3.2
       }
     },
     {
@@ -62,11 +65,12 @@
         "cpu_total_cores": 25.0,
         "cpu_gc_cores": 2.5,
         "memory_working_set_gb": 28.0,
-        "etcd_fsync_buckets": {"0.005": 1500, "0.01": 80, "0.05": 12, "+Inf": 0}
+        "etcd_fsync_p99_ms": 4.34
       },
       "baseline_run": {
         "concurrency_inflight": 410,
-        "cpu_total_cores": 12.5
+        "cpu_total_cores": 12.5,
+        "etcd_fsync_p99_ms": 3.2
       }
     },
     {
@@ -77,11 +81,12 @@
         "cpu_total_cores": 58.2,
         "cpu_gc_cores": 5.1,
         "memory_working_set_gb": 42.5,
-        "etcd_fsync_buckets": {"0.005": 2500, "0.01": 150, "0.05": 20, "+Inf": 0}
+        "etcd_fsync_p99_ms": 4.01
       },
       "baseline_run": {
         "concurrency_inflight": 400,
-        "cpu_total_cores": 12.0
+        "cpu_total_cores": 12.0,
+        "etcd_fsync_p99_ms": 3.2
       }
     },
     {
@@ -92,11 +97,12 @@
         "cpu_total_cores": 60.5,
         "cpu_gc_cores": 6.5,
         "memory_working_set_gb": 48.0,
-        "etcd_fsync_buckets": {"0.005": 2200, "0.01": 140, "0.05": 18, "+Inf": 0}
+        "etcd_fsync_p99_ms": 3.9699999999999998
       },
       "baseline_run": {
         "concurrency_inflight": 390,
-        "cpu_total_cores": 11.8
+        "cpu_total_cores": 11.8,
+        "etcd_fsync_p99_ms": 3.2
       }
     },
     {
@@ -107,11 +113,12 @@
         "cpu_total_cores": 59.0,
         "cpu_gc_cores": 6.0,
         "memory_working_set_gb": 50.5,
-        "etcd_fsync_buckets": {"0.005": 2000, "0.01": 120, "0.05": 15, "+Inf": 0}
+        "etcd_fsync_p99_ms": 3.68
       },
       "baseline_run": {
         "concurrency_inflight": 405,
-        "cpu_total_cores": 12.2
+        "cpu_total_cores": 12.2,
+        "etcd_fsync_p99_ms": 3.2
       }
     },
     {
@@ -122,11 +129,12 @@
         "cpu_total_cores": 45.0,
         "cpu_gc_cores": 4.5,
         "memory_working_set_gb": 45.0,
-        "etcd_fsync_buckets": {"0.005": 1600, "0.01": 90, "0.05": 10, "+Inf": 0}
+        "etcd_fsync_p99_ms": 3.94
       },
       "baseline_run": {
         "concurrency_inflight": 415,
-        "cpu_total_cores": 12.4
+        "cpu_total_cores": 12.4,
+        "etcd_fsync_p99_ms": 3.2
       }
     },
     {
@@ -137,11 +145,12 @@
         "cpu_total_cores": 30.0,
         "cpu_gc_cores": 3.0,
         "memory_working_set_gb": 35.0,
-        "etcd_fsync_buckets": {"0.005": 1300, "0.01": 60, "0.05": 5, "+Inf": 0}
+        "etcd_fsync_p99_ms": 3.66
       },
       "baseline_run": {
         "concurrency_inflight": 395,
-        "cpu_total_cores": 11.9
+        "cpu_total_cores": 11.9,
+        "etcd_fsync_p99_ms": 3.2
       }
     }
   ],

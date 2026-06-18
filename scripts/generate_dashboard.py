@@ -139,49 +139,36 @@ def generate_memory_plot(data, output_dir):
     plt.savefig(os.path.join(output_dir, 'dim4_memory.png'))
     plt.close()
 
-def generate_etcd_heatmap(data, output_dir):
+def generate_etcd_plot(data, output_dir):
     time_series = data.get("time_series_data", [])
     if not time_series:
         return
         
     times = [tick["relative_time_seconds"] for tick in time_series]
-    
-    # Identify all possible buckets
-    buckets = set()
-    for tick in time_series:
-        buckets.update(tick["failed_run"].get("etcd_fsync_buckets", {}).keys())
-    
-    # Sort buckets numerically where possible, put '+Inf' last
-    def bucket_sort_key(b):
-        if b == '+Inf': return float('inf')
-        try: return float(b)
-        except ValueError: return float('inf')
-        
-    sorted_buckets = sorted(list(buckets), key=bucket_sort_key)
-    
-    heatmap_data = np.zeros((len(sorted_buckets), len(times)))
-    
-    for c_idx, tick in enumerate(time_series):
-        b_data = tick["failed_run"].get("etcd_fsync_buckets", {})
-        for r_idx, b in enumerate(sorted_buckets):
-            heatmap_data[r_idx, c_idx] = b_data.get(b, 0)
-            
-    df = pd.DataFrame(heatmap_data, index=sorted_buckets, columns=[int(t) for t in times])
+    failed_p99 = [tick["failed_run"].get("etcd_fsync_p99_ms", 0) for tick in time_series]
+    baseline_p99 = [tick.get("baseline_run", {}).get("etcd_fsync_p99_ms", 0) for tick in time_series]
 
-    fig, ax = plt.subplots(figsize=(12, 5))
-    sns.heatmap(df, cmap="YlGnBu", cbar_kws={'label': 'Fsync Count'}, ax=ax)
+    fig, ax = plt.subplots(figsize=(10, 6))
     
-    # Try to draw the 50ms line if '0.05' exists
-    if '0.05' in sorted_buckets:
-        idx = sorted_buckets.index('0.05')
-        ax.axhline(idx, color='red', linestyle='dashed', linewidth=2, label='50ms Critical Threshold')
-        plt.legend()
+    if any(baseline_p99):
+        ax.plot(times, baseline_p99, color='gray', linestyle='--', linewidth=2, label='Baseline P99 (Healthy)')
         
+    ax.plot(times, failed_p99, color='crimson', linewidth=2, label='Failed Run P99')
+    
+    # 50ms Critical Threshold
+    ax.axhline(50, color='red', linestyle='dashed', linewidth=2, label='50ms Critical Threshold')
+    
+    # ensure Y axis can accommodate the 50ms line even if values are low
+    max_val = max(max(failed_p99), max(baseline_p99) if baseline_p99 else 0)
+    ax.set_ylim(0, max(60, max_val * 1.1))
+
+    ax.axvline(0, color='black', linestyle=':', label='T=0 (Traffic Spike)')
     ax.set_xlabel('Relative Time (seconds)')
-    ax.set_ylabel('Disk Save Time (Fsync Bucket)')
-    plt.title('Dimension 5: Etcd Disk Health (Heatmap)\n(Are the hard drives too slow?)')
+    ax.set_ylabel('Fsync Latency (ms)')
+    ax.legend(loc='upper left', frameon=True, shadow=True)
+    plt.title('Dimension 5: Etcd Disk IOPS (P99 Latency)\n(Did the storage layer bottleneck?)')
     plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, 'dim5_etcd_heatmap.png'))
+    plt.savefig(os.path.join(output_dir, 'dim5_etcd_p99.png'))
     plt.close()
 
 def main():
@@ -200,7 +187,7 @@ def main():
     generate_cpu_plot(data, args.output_dir)
     generate_pprof_pie(data, args.output_dir)
     generate_memory_plot(data, args.output_dir)
-    generate_etcd_heatmap(data, args.output_dir)
+    generate_etcd_plot(data, args.output_dir)
     
     print(f"Visualizations successfully generated in: {args.output_dir}")
 

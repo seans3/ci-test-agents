@@ -109,13 +109,13 @@ To ensure the failure is immediately understandable to Kubernetes engineers who 
 *   **Y-Axis:** Memory Usage in GB (`memory_working_set_gb`).
 *   **Overlay:** A dashed red horizontal line drawn at `hardware_limits.kube_apiserver_memory_limit_gb`.
 
-#### 3.8. Dimension 5: Etcd Disk IOPS Heatmap
-**Goal:** Rule out or confirm the underlying storage layer as the root bottleneck.
-*   **Format:** Distribution Heatmap.
+#### 3.8. Dimension 5: Etcd Disk IOPS (P99 Latency)
+**Goal:** Rule out or confirm the underlying storage layer as the root bottleneck using an easily readable threshold.
+*   **Format:** Line Chart with Thresholds.
 *   **X-Axis:** Relative Time (`T-5m` to `T+5m`).
-*   **Y-Axis:** Fsync duration buckets (e.g., 5ms, 10ms, 50ms+).
-*   **Color Intensity:** Derived from the counts in `etcd_fsync_buckets`.
-*   **Overlay:** A dashed horizontal line at the 50ms critical threshold.
+*   **Y-Axis:** Fsync Latency (milliseconds).
+*   **Data:** Plot `etcd_fsync_p99_ms` for both the failed run (Solid Red) and baseline run (Dashed Gray).
+*   **Overlay:** A dashed horizontal line at the 50ms critical threshold. This visually proves if the disk ever crossed into dangerous territory.
 
 ## 4. Visualizing Alternative Failure Modes (Non-Overload Scenarios)
 The aforementioned dimensions primarily target saturation and overload. However, 5k-node tests can fail for reasons unrelated to sheer volume. The visualization suite must dynamically adapt to present evidence for these alternative failure modes:
