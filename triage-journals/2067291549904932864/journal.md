@@ -72,14 +72,11 @@ This failure is classified as an **Emergent System Limit / Latent Bug**.
 
 The mechanical bottleneck strongly appears to be the Go runtime profiler locking the CPU under load, triggered by a 26.8% traffic surge from dropped watches. 
 
-Crucially, deep-dive analysis of the `kube-apiserver.log` immediately preceding the latency spike (`T=0`) proves that these initial watch disconnects were NOT caused by a code regression (such as the recent `WatchCache` refactoring PRs). We found no API server errors, panics, or unexpected connection terminations. Instead, we found that the dropped watches closed gracefully with a 200 OK because their `timeoutSeconds` had naturally expired.
+Crucially, deep-dive analysis of the client-side logs (`kube-controller-manager.log`) immediately preceding the latency spike (`T=0`) proves that these initial watch disconnects were NOT caused by a code regression (such as the recent `WatchCache` refactoring PRs). We found the true smoking gun on the client side: 56 explicit errors indicating the EndpointSlice controller's cache had fallen behind, forcing it to drop its connection and issue a full re-sync via `LIST` requests.
 
-*Visual Evidence (API Server Log - Watch Jitter Timeout):*
+*Visual Evidence (Controller Manager Log - Cache Desync):*
 ```text
-I0617 19:06:00.003291 12 httplog.go:135] "HTTP" verb="WATCH" URI="/api/v1/namespaces/test-4e8otb-1/configmaps?...timeout=35m34s&timeoutSeconds=2134&watch=true" latency="27m32.514706755s" ... resp=200
+I0617 19:05:18.897025 12 endpointslice_controller.go:358] "Error syncing endpoint slices for service, retrying" key="test-4e8otb-48/small-service-102" err="EndpointSlice informer cache is out of date"
 ```
-In a 5,000-node cluster, Kubernetes "Watch Jitter" randomly staggers timeouts to prevent all nodes from reconnecting simultaneously. However, pure mathematical variance dictates that occasionally, the randomized expirations of ~120 connections will perfectly align within the same minute window. 
 
-When they do, they all successfully close (`resp=200`) and the clients legitimately reconnect by issuing massive `LIST` requests. 
-
-**Next Steps:** The initial traffic surge is not a bug; it is perfectly normal, mathematically expected Kubernetes behavior. The true and only bug is the `perf-tests` profiling configuration. We strongly recommend an immediate architectural audit to disable `--contention-profiling` at 5k-node scales, as it is artificially inducing test failures during normal, healthy traffic variance.
+**Next Steps:** The mechanical bottleneck was the profiler lockup, but the *initial trigger* was the `EndpointSlice` controller's informer cache falling out of date under load. We strongly recommend an immediate architectural audit to 1) disable `--contention-profiling` at 5k-node scales (to mitigate the fatal lockup), and 2) investigate why the EndpointSlice controller is failing to keep up with the API Server's event stream during normal 5k-node load testing.
