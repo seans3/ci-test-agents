@@ -111,3 +111,27 @@ To ensure the failure is immediately understandable to Kubernetes engineers who 
 *   **Y-Axis:** Fsync duration buckets (e.g., 5ms, 10ms, 50ms+).
 *   **Color Intensity:** Derived from the counts in `etcd_fsync_buckets`.
 *   **Overlay:** A dashed horizontal line at the 50ms critical threshold.
+
+## 4. Visualizing Alternative Failure Modes (Non-Overload Scenarios)
+The aforementioned dimensions primarily target saturation and overload. However, 5k-node tests can fail for reasons unrelated to sheer volume. The visualization suite must dynamically adapt to present evidence for these alternative failure modes:
+
+### 4.1. Component Crashes (Panics & OOMKills)
+**Scenario:** A component hits a logic bug (Go panic) or memory leak and is killed. The system isn't broadly overloaded; it just crashed.
+*   **Format:** Event Scatter-Plot Overlay.
+*   **Data Source:** `kube_pod_container_status_restarts_total` and log panic signatures.
+*   **Visualization:** Plot discrete events (e.g., container restarts) as highly visible markers (e.g., bright X's) directly on the Tier 1 Narrative Timeline. Embed the exact panic stack trace extracted from the logs as a pop-over or annotation on the event marker.
+
+### 4.2. Infrastructure Flakes & Network Partitions
+**Scenario:** The cloud provider drops network traffic, or a batch of nodes suddenly goes `NotReady`. The API server is healthy, but the nodes are unreachable.
+*   **Format:** Node Readiness Heatmap.
+*   **X-Axis:** Relative Time.
+*   **Y-Axis:** Node Batches (e.g., grouped by zone or instance group).
+*   **Color Intensity:** Green (Ready) to Red (NotReady/Unknown). 
+*   **Goal:** Instantly prove the failure was a localized network/provider partition (e.g., an entire zone goes red simultaneously), exonerating the control-plane software.
+
+### 4.3. Controller Deadlocks & Logic Bugs
+**Scenario:** CPU is low, API latency is fast, but the test times out because pods are stuck in `Pending`. A specific controller's sync loop is deadlocked or severely delayed.
+*   **Format:** Workqueue Depth & Latency Charts.
+*   **Data Source:** `workqueue_depth` and `workqueue_queue_duration_seconds`.
+*   **Visualization:** A line chart showing the queue depth of the specific failing controller. 
+*   **Goal:** Visually prove that the API was responsive, but a specific internal queue (e.g., `replicaset_controller`) stalled indefinitely, isolating the logic bug.
