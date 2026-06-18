@@ -7,6 +7,19 @@
 ## Executive Summary
 The 5k-node scalability test failed due to an API Responsiveness SLO breach (p99 `LIST pods` latency hit 41.48s, limit 30s). Data strongly indicates this is associated with a "Thundering Herd" of reconnecting clients issuing unpaginated `LIST` requests. The metrics suggest `etcd` IOPS saturation is unlikely to be the primary cause. Furthermore, temporal `.pprof` analysis indicates the API Server was heavily bottlenecked by channel blocking (`runtime.selectgo`) and lock contention on internal `WATCH` event caches, rather than GC churn. This channel saturation likely contributed to watches dropping, thereby triggering the Thundering Herd.
 
+## Environment Constraints (Control Plane Characteristics)
+This specific 5k-node scalability benchmark does not use an HA control plane; it tests the absolute vertical scaling limits of a single, monolithic control-plane node. The physical hardware limits of this node dictate the absolute ceiling for the saturation metrics analyzed below.
+
+| Characteristic | Specification |
+| :--- | :--- |
+| **Node Name** | `control-plane-us-east1-b-dj79` |
+| **Machine Type** | `n2-standard-64` (Typical for 5k scale) |
+| **Total CPU Cores** | 64 Cores |
+| **Memory Limit** | 256 GB (API Server `cgroup` limit ~64 GB) |
+| **Storage** | Local NVMe SSD (`etcd` WAL) |
+
+---
+
 ## Triage Narrative & Findings
 
 ### 1. Initial Triage: Ground Truth vs. Symptoms
