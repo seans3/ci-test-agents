@@ -75,6 +75,8 @@ To ensure the failure is immediately understandable to Kubernetes engineers who 
 **Target Audience:** Core Kubernetes maintainers, SIG-Scalability engineers.
 **Goal:** Provide the exact `.pprof`, Prometheus, and `etcd` metric traces required to write the code fix.
 
+**Layout Rule (Multi-Panel Grid):** Do NOT overlay all dimensions onto a single, unreadable "spaghetti graph." The following time-series dimensions (3.4, 3.5, 3.7, 3.8) MUST be rendered as multiple distinct charts arranged in a vertical stack (a Trellis layout) sharing a synchronized X-axis. This allows an engineer to scroll down and visually correlate a spike in concurrency with a spike in CPU lock contention at the exact same vertical slice in time.
+
 #### 3.4. Dimension 1: Concurrency Surge (The Ghost Overlay)
 **Goal:** Visually correlate the traffic anomaly against a known-good run.
 *   **Format:** Dual-Axis Line Chart.
