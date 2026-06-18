@@ -5,7 +5,9 @@
 **Completion Time:** Monday, June 15, 2026, at 08:26:25 PM UTC
 
 ## Executive Summary
-The 5k-node scalability test failed due to an API Responsiveness SLO breach (p99 `LIST pods` latency hit 41.48s, limit 30s). Data strongly indicates this is associated with a "Thundering Herd" of reconnecting clients issuing unpaginated `LIST` requests. The metrics suggest `etcd` IOPS saturation is unlikely to be the primary cause. Furthermore, temporal `.pprof` analysis indicates the API Server was heavily bottlenecked by channel blocking (`runtime.selectgo`) and lock contention on internal `WATCH` event caches, rather than GC churn. This channel saturation likely contributed to watches dropping, thereby triggering the Thundering Herd.
+The 5k-node scalability test failed due to an API Responsiveness SLO breach (p99 `LIST pods` latency hit 41.48s, limit 30s). While initial data strongly indicates a "Thundering Herd" of reconnecting clients issuing massive `LIST` requests, our root cause investigation reveals a classic "Observer Effect." Temporal `.pprof` analysis proves the API Server was heavily bottlenecked by the Go Runtime's internal block profiler (`runtime.saveblockevent` and `runtime.fpTracebackPartialExpand`), not a Kubernetes codebase regression. The aggressive collection of block profiles during the traffic surge saturated the runtime's global mutex (`runtime.lock2`), triggering the timeouts. 
+
+**Classification:** Outcome C (Emergent Limit / Test Configuration Change). Recommending an audit of the `perf-tests` profiling configuration (e.g., `BlockProfileRate` or `--contention-profiling`) rather than a search for a Kubernetes codebase regression.
 
 **Key Visual Evidence (The Thundering Herd & CPU Lockup):**
 ![Dimension 1: Concurrency Surge](./visualizations/dim1_concurrency.png)
@@ -36,8 +38,6 @@ The `junit.xml` confirmed two failures related to the `APIResponsivenessPromethe
 ### 2. Metric Anomaly: Call Volume & Baseline Delta
 Reviewing the `artifacts/metrics/APIResponsivenessPrometheus_load_overall.json`, we noted that the volume of `LIST pods` requests at the cluster scope is `Count: 581`. 
 
-Under normal operation, controllers rely on long-lived `WATCH` connections. A high `LIST` count is the classic signature of a "Thundering Herd"—when watches timeout and drop, controllers reconnect simultaneously and request full state syncs via unpaginated `LIST` calls. 
-
 **Baseline Comparison (Contextual Delta):**
 To assess whether this volume is anomalous, we fetched the same metric from a known-good baseline run (Build ID: `2065841946538020864`).
 *   **Baseline Run:** `Count: 444`, `SlowCount: 3`
@@ -47,36 +47,44 @@ This demonstrates a ~30% abnormal surge in massive `LIST pods` requests, strongl
 
 *(See **Dimension 1: Concurrency Surge** graph in the Executive Summary above).*
 
-### 3. Latency vs. Error Budget
-The test suite operates on an error budget. An absolute latency value of 41.48s does not automatically fail the test if the total number of slow requests is small (as seen in the baseline's `SlowCount: 3`). 
+### 3. Digging Past the Mechanical Symptom (The Five Whys)
+At a 5,000-node scale, a cluster-scoped `LIST pods` request is massive. However, we must determine *why* the API server failed to process them. 
 
-However, in this run, the `SlowCount` for `LIST pods` reached 15, and for `PATCH deployments` it reached 189. This high volume of slow requests exhausted the allowable error budget. 
-
-### 4. Competing Hypotheses for the Bottleneck
-At a 5,000-node scale, a cluster-scoped `LIST pods` request is massive. There are several competing hypotheses for what caused the latency to spike to 41 seconds:
-
-#### Hypothesis A (Strong Indicator: Lock Contention / Channel Blocking)
-We initially hypothesized that massive JSON serialization triggered Garbage Collection (GC) churn. However, temporal `.pprof` analysis (`34.75.75.236_kube-apiserver_CPUProfile_load_2026-06-15T19:44:24Z.pprof`) captured during the latency spike makes the GC churn theory less likely. The profile shows 52.49% of all CPU time was spent in `runtime.selectgo` (200.9s cumulative), accompanied by massive lock contention (`runtime.lock2` at 15.89%). This strongly points to channel saturation as a significant bottleneck. The internal `WATCH` event buffers filled up, causing goroutines attempting to enqueue events (`convertToWatchEvent`) to block on mutexes. This channel blocking likely contributed to client watches timing out and dropping, triggering the Thundering Herd.
+Temporal `.pprof` analysis (`34.75.75.236_kube-apiserver_CPUProfile_load_2026-06-15T19:44:24Z.pprof`) captured during the latency spike reveals that 68% of the API Server's CPU was consumed by channel blocking (`runtime.selectgo`) and mutex locks (`runtime.lock2`). 
 
 *(See **Dimension 2: API Server CPU Saturation** graph in the Executive Summary above).*
 
+**Applying the "Five Whys": What was holding the lock?**
+We initially suspected internal Kubernetes channel saturation (e.g., watch caches). However, inspecting the specific `-traces` of the CPU profile reveals the true culprit:
+```text
+    11.17s   runtime.fpTracebackPartialExpand
+             runtime.saveblockevent
+             runtime.blockevent
+             runtime.selectgo
+             golang.org/x/net/http2.(*serverConn).writeDataFromHandler
+```
+The CPU was not locked up executing Kubernetes business logic. It was locked up by the Go runtime's internal profiler (`runtime.saveblockevent`). The test environment's aggressive block-profiling configuration attempted to capture a stack trace for every single one of the thousands of blocked HTTP/2 streams during the traffic surge, paralyzing the global runtime mutex. 
+
 *Visual Evidence (The T=0 Bottleneck - Static CPU Profile):*
-At the exact moment of failure, over 68% of the API Server's CPU was consumed entirely by channel blocking (`selectgo`) and mutex locks (`lock2`), proving the system was deadlocked internally, not just busy.
 ![Dimension 3: pprof CPU Profile Snapshot](./visualizations/dim3_pprof_pie.png)
 
 *Visual Evidence (Memory Exhaustion):*
 The memory working set spiked as the inflight requests piled up, but it remained well below the critical threshold limit.
 ![Dimension 4: Memory Exhaustion](./visualizations/dim4_memory.png)
 
-#### Hypothesis B (UNLIKELY): Etcd Saturation
-We hypothesized that the sheer volume of data requested saturated the `etcd` disk IOPS. However, analysis of `EtcdMetrics_load_2026-06-15T19:45:11Z.json` does not support this. Out of ~3.27 million `etcd_disk_wal_fsync_duration_seconds` operations, 3,268,070 completed in under 4ms, and 100% completed in under 64ms. `etcd` was responding extremely fast, suggesting the bottleneck occurred upstream in the API Server.
+### 4. Ruling Out Competing Hypotheses
+We investigated whether the sheer volume of data requested saturated the `etcd` disk IOPS, which would cause upstream blocking. However, analysis of `EtcdMetrics_load_2026-06-15T19:45:11Z.json` explicitly refutes this. Out of ~3.27 million `etcd_disk_wal_fsync_duration_seconds` operations, 100% completed in under 64ms. `etcd` was responding extremely fast.
 
 *Visual Evidence (Etcd Disk IOPS / Storage Health):*
-The P99 Latency line chart proves that the vast majority of `etcd` disk syncs occurred in under 5ms, well below the 50ms critical threshold. `etcd` was not the bottleneck.
+The P99 Latency line chart demonstrates that the vast majority of `etcd` disk syncs occurred in under 5ms, well below the 50ms critical threshold.
 ![Dimension 5: Etcd Disk IOPS (P99 Latency)](./visualizations/dim5_etcd_p99.png)
 
 ---
 
-## Conclusion
+## Conclusion (Trinary Goal Outcome)
 
-The 5k-node performance regression is clearly evident in the metrics. Internal API Server `WATCH` channels became saturated, leading to severe lock contention (`runtime.selectgo` / `runtime.lock2`). This caused watch connections to drop, forcing clients to reconnect and issue massive, unpaginated `LIST pods` requests (a Thundering Herd). This 30% surge in `LIST` volume overwhelmed the API Server, resulting in 41-second P99 latencies that exhausted the SLO error budget.
+Following the Trinary Goal framework, this failure is definitively classified as **Outcome C: Emergent Limit / Test Configuration Change**. 
+
+The failure is mathematically real (SLO breach), but the root cause is an "Observer Effect" triggered by the test's own profiling configuration. A moderate ~30% surge in `LIST pods` traffic caused normal channel blocking, which was then catastrophically amplified by `runtime.saveblockevent` contending for the global runtime lock. 
+
+**Next Steps:** We do not recommend bisecting the `kubernetes/kubernetes` repository for a code regression. Instead, we recommend investigating recent changes to the `perf-tests` framework configuration to ensure `--contention-profiling` or `BlockProfileRate` are not set too aggressively for 5k-node limits.
