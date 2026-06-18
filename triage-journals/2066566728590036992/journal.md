@@ -5,7 +5,7 @@
 **Completion Time:** Monday, June 15, 2026, at 08:26:25 PM UTC
 
 ## Executive Summary
-The 5k-node scalability test failed due to an API Responsiveness SLO breach (p99 `LIST pods` latency hit 41.48s, limit 30s). While initial data strongly indicates a "Thundering Herd" of reconnecting clients issuing massive `LIST` requests, our root cause investigation reveals a classic "Observer Effect" triggered by a scaling cliff. Temporal `.pprof` analysis proves the API Server was heavily bottlenecked by the Go Runtime's internal block profiler (`runtime.saveblockevent` and `runtime.fpTracebackPartialExpand`). Crucially, verification of the cluster setup logs shows this profiling was active in *both* the passing baseline and the failed run. The failure occurred because a 30% surge in traffic (The Thundering Herd) pushed the volume of blocked channels past the tipping point, causing the profiler's global mutex (`runtime.lock2`) to catastrophically lock the CPU. Culprit pinpointing revealed the traffic surge was introduced by **PR #139720** and **PR #139719**, which refactored the API Server `WatchCache`. This is a hard regression; the subsequent build (`2067291549904932864`) just failed with the exact same signature.
+The 5k-node scalability test failed due to an API Responsiveness SLO breach (p99 `LIST pods` latency hit 41.48s, limit 30s). While initial data strongly indicates a "Thundering Herd" of reconnecting clients issuing massive `LIST` requests, our root cause investigation reveals a classic "Observer Effect" triggered by a scaling cliff. Temporal `.pprof` analysis strongly indicates the API Server was heavily bottlenecked by the Go Runtime's internal block profiler (`runtime.saveblockevent` and `runtime.fpTracebackPartialExpand`). Crucially, verification of the cluster setup logs shows this profiling was active in *both* the passing baseline and the failed run. The failure likely occurred because a 30% surge in traffic (The Thundering Herd) pushed the volume of blocked channels past a tipping point, causing the profiler's global mutex (`runtime.lock2`) to lock the CPU. Culprit pinpointing suggests the traffic surge was introduced by **PR #139720** and **PR #139719**, which refactored the API Server `WatchCache`. This appears to be a consistent regression; the subsequent build (`2067291549904932864`) also failed with the exact same signature.
 
 **Classification:** Outcome B (Code Regression). Recommending review/revert of the `WatchCache` refactoring PRs that triggered the initial watch disconnects.
 
@@ -33,7 +33,7 @@ Initial triage began by filtering the raw logs. We explicitly checked `artifacts
 
 The `junit.xml` confirmed two failures related to the `APIResponsivenessPrometheus` measurement. 
 *   **Exact Signature:** `[got: &{Resource:pods Subresource: Verb:LIST Scope:cluster Latency:perc50: 983.769633ms, perc90: 21.020833333s, perc99: 41.487499999s Count:581 SlowCount:15}; expected perc99 <= 30s`
-*   This confirms a primary performance regression, allowing us to rule out spurious infrastructure teardown deadlocks.
+*   This strongly suggests a primary performance regression, allowing us to likely rule out spurious infrastructure teardown deadlocks.
 
 ### 2. Metric Anomaly: Call Volume & Baseline Delta
 Reviewing the `artifacts/metrics/APIResponsivenessPrometheus_load_overall.json`, we noted that the volume of `LIST pods` requests at the cluster scope is `Count: 581`. 
@@ -55,7 +55,7 @@ Temporal `.pprof` analysis (`34.75.75.236_kube-apiserver_CPUProfile_load_2026-06
 *(See **Dimension 2: API Server CPU Saturation** graph in the Executive Summary above).*
 
 **Applying the "Five Whys": What was holding the lock, and why did the baseline pass?**
-We initially suspected internal Kubernetes channel saturation (e.g., watch caches). However, inspecting the specific `-traces` of the CPU profile reveals the true culprit:
+We initially suspected internal Kubernetes channel saturation (e.g., watch caches). However, inspecting the specific `-traces` of the CPU profile points to a highly probable culprit:
 ```text
     11.17s   runtime.fpTracebackPartialExpand
              runtime.saveblockevent
@@ -76,27 +76,27 @@ Therefore, the test configuration did *not* change. The baseline passed because 
 The memory working set spiked as the inflight requests piled up, but it remained well below the critical threshold limit.
 ![Dimension 4: Memory Exhaustion](./visualizations/dim4_memory.png)
 
-### 4. Ruling Out Competing Hypotheses
-We investigated whether the sheer volume of data requested saturated the `etcd` disk IOPS, which would cause upstream blocking. However, analysis of `EtcdMetrics_load_2026-06-15T19:45:11Z.json` explicitly refutes this. Out of ~3.27 million `etcd_disk_wal_fsync_duration_seconds` operations, 100% completed in under 64ms. `etcd` was responding extremely fast.
+### 4. Evaluating Competing Hypotheses
+We investigated whether the sheer volume of data requested saturated the `etcd` disk IOPS, which would cause upstream blocking. However, analysis of `EtcdMetrics_load_2026-06-15T19:45:11Z.json` does not support this. Out of ~3.27 million `etcd_disk_wal_fsync_duration_seconds` operations, 100% completed in under 64ms. `etcd` appears to have been responding extremely fast.
 
 *Visual Evidence (Etcd Disk IOPS / Storage Health):*
-The P99 Latency line chart demonstrates that the vast majority of `etcd` disk syncs occurred in under 5ms, well below the 50ms critical threshold.
+The P99 Latency line chart indicates that the vast majority of `etcd` disk syncs occurred in under 5ms, well below the 50ms critical threshold.
 ![Dimension 5: Etcd Disk IOPS (P99 Latency)](./visualizations/dim5_etcd_p99.png)
 
 ---
 
 ## Conclusion (Trinary Goal Outcome)
 
-Following the Trinary Goal framework, this failure is definitively classified as **Outcome B: Code Regression**. 
+Following the Trinary Goal framework, this failure is classified as **Outcome B: Code Regression**. 
 
-While the direct mechanical cause of the failure was an "Observer Effect" (the profiler locked the CPU), we must answer *why* the traffic surged by 30% to trigger the profiler. 
+While the direct mechanical cause of the failure appears to be an "Observer Effect" (the profiler locked the CPU), we must consider *why* the traffic surged by 30% to trigger the profiler. 
 
 By defining the strict suspect window between the LKG build (`99dad60c350`) and the failing build (`9d6e94a40d9`), we isolated the commits merged into `kubernetes/kubernetes`. Cross-referencing the failure signature (Watch Cache timeouts leading to a Thundering Herd) against this window revealed two highly suspect, back-to-back refactoring PRs:
 *   **PR #139720:** `Encapsulate storage mutations and snapshots inside watchCacheStorage`
 *   **PR #139719:** `Refactor watchCache to delegate history operations to watchCacheHistory`
 
-These PRs fundamentally altered the locking and memory delegation semantics of the API Server's internal `WatchCache`. This regression in the watch cache caused the initial stream disconnects, generating the 30% surge in `LIST pods` requests. The surge then triggered the fatal profiling lockup.
+These PRs fundamentally altered the locking and memory delegation semantics of the API Server's internal `WatchCache`. This change in the watch cache likely caused the initial stream disconnects, generating the 30% surge in `LIST pods` requests. The surge then likely triggered the fatal profiling lockup.
 
-**Red-Team Corroboration (The Hard Break):** To ensure this was not a one-off anomaly, we verified the subsequent test run (Build `2067291549904932864`), which just completed. It failed with the exact same signature (p99 Latency: 43.6s, Count: 563). This proves the master branch is suffering a hard, continuous regression.
+**Red-Team Corroboration (The Consistent Break):** To assess if this was a one-off anomaly, we verified the subsequent test run (Build `2067291549904932864`), which just completed. It failed with the exact same signature (p99 Latency: 43.6s, Count: 563). This strongly suggests the master branch is suffering a continuous regression.
 
 **Next Steps:** Recommending an immediate revert or intensive review of PRs #139720 and #139719, followed by an automated Kubemark verification run to confirm the SLO returns to passing metrics.
