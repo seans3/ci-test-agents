@@ -7,6 +7,10 @@
 ## Executive Summary
 The 5k-node scalability test failed due to an API Responsiveness SLO breach (p99 `LIST pods` latency hit 41.48s, limit 30s). Data strongly indicates this is associated with a "Thundering Herd" of reconnecting clients issuing unpaginated `LIST` requests. The metrics suggest `etcd` IOPS saturation is unlikely to be the primary cause. Furthermore, temporal `.pprof` analysis indicates the API Server was heavily bottlenecked by channel blocking (`runtime.selectgo`) and lock contention on internal `WATCH` event caches, rather than GC churn. This channel saturation likely contributed to watches dropping, thereby triggering the Thundering Herd.
 
+**Key Visual Evidence (The Thundering Herd & CPU Lockup):**
+![Dimension 1: Concurrency Surge](./visualizations/dim1_concurrency.png)
+![Dimension 2: API Server CPU Saturation](./visualizations/dim2_cpu.png)
+
 ## Environment Constraints (Control Plane Characteristics)
 This specific 5k-node scalability benchmark does not use an HA control plane; it tests the absolute vertical scaling limits of a single, monolithic control-plane node. The physical hardware limits of this node dictate the absolute ceiling for the saturation metrics analyzed below.
 
@@ -41,9 +45,7 @@ To assess whether this volume is anomalous, we fetched the same metric from a kn
 
 This demonstrates a ~30% abnormal surge in massive `LIST pods` requests, strongly suggesting a Thundering Herd phenomenon occurred, contributing to a 5x increase in requests violating the SLO budget.
 
-*Visual Evidence (Concurrency Surge):*
-This graph visually correlates the massive surge in inflight `LIST` requests (The Thundering Herd) against the normal baseline.
-![Dimension 1: Concurrency Surge](./visualizations/dim1_concurrency.png)
+*(See **Dimension 1: Concurrency Surge** graph in the Executive Summary above).*
 
 ### 3. Latency vs. Error Budget
 The test suite operates on an error budget. An absolute latency value of 41.48s does not automatically fail the test if the total number of slow requests is small (as seen in the baseline's `SlowCount: 3`). 
@@ -56,9 +58,7 @@ At a 5,000-node scale, a cluster-scoped `LIST pods` request is massive. There ar
 #### Hypothesis A (Strong Indicator: Lock Contention / Channel Blocking)
 We initially hypothesized that massive JSON serialization triggered Garbage Collection (GC) churn. However, temporal `.pprof` analysis (`34.75.75.236_kube-apiserver_CPUProfile_load_2026-06-15T19:44:24Z.pprof`) captured during the latency spike makes the GC churn theory less likely. The profile shows 52.49% of all CPU time was spent in `runtime.selectgo` (200.9s cumulative), accompanied by massive lock contention (`runtime.lock2` at 15.89%). This strongly points to channel saturation as a significant bottleneck. The internal `WATCH` event buffers filled up, causing goroutines attempting to enqueue events (`convertToWatchEvent`) to block on mutexes. This channel blocking likely contributed to client watches timing out and dropping, triggering the Thundering Herd.
 
-*Visual Evidence (API Server CPU Saturation):*
-Notice the massive surge in "Core Logic / Lock Contention" at T=0, while Garbage Collection overhead remains relatively low.
-![Dimension 2: API Server CPU Saturation](./visualizations/dim2_cpu.png)
+*(See **Dimension 2: API Server CPU Saturation** graph in the Executive Summary above).*
 
 *Visual Evidence (The T=0 Bottleneck - Static CPU Profile):*
 At the exact moment of failure, over 68% of the API Server's CPU was consumed entirely by channel blocking (`selectgo`) and mutex locks (`lock2`), proving the system was deadlocked internally, not just busy.
