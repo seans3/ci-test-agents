@@ -5,14 +5,27 @@ import subprocess
 import re
 import datetime
 
-def fetch_gcs_json(build_id, filename):
-    cmd = f"gcloud storage cat gs://kubernetes-ci-logs/logs/ci-kubernetes-e2e-gce-scale-performance-5000/{build_id}/artifacts/{filename}"
+def find_and_fetch_gcs_json(build_id, prefix):
+    ls_cmd = f"gcloud storage ls gs://kubernetes-ci-logs/logs/ci-kubernetes-e2e-gce-scale-performance-5000/{build_id}/artifacts/ | grep {prefix}"
     try:
-        result = subprocess.run(cmd, shell=True, check=True, capture_output=True, text=True)
-        return json.loads(result.stdout)
+        ls_result = subprocess.run(ls_cmd, shell=True, check=True, capture_output=True, text=True)
+        paths = ls_result.stdout.strip().split('\n')
+        target_path = None
+        for path in paths:
+            if prefix in path and "simple" not in path:
+                target_path = path
+                break
+        if not target_path and paths:
+            target_path = paths[0]
+            
+        if target_path:
+            cmd = f"gcloud storage cat {target_path}"
+            result = subprocess.run(cmd, shell=True, check=True, capture_output=True, text=True)
+            return json.loads(result.stdout)
     except Exception as e:
-        print(f"Warning: Failed to fetch {filename} for build {build_id}. Returning empty.")
-        return {}
+        pass
+    print(f"Warning: Failed to fetch {prefix} for build {build_id}. Returning empty.")
+    return {}
 
 def extract_api_count(data):
     # Fallback heuristic: we look for the "LIST pods" cluster-scope metric
@@ -43,8 +56,8 @@ def main():
     # using prometheus_snapshot.tar and query the precise time series via HTTP API. 
     # For this Local-First prototype, we derive the time-series bounds from the CL2 JSON summaries.
     
-    failed_api = fetch_gcs_json(args.failed, "APIResponsivenessPrometheus_load_overall.json")
-    baseline_api = fetch_gcs_json(args.baseline, "APIResponsivenessPrometheus_load_overall.json")
+    failed_api = find_and_fetch_gcs_json(args.failed, "APIResponsivenessPrometheus_load")
+    baseline_api = find_and_fetch_gcs_json(args.baseline, "APIResponsivenessPrometheus_load")
     
     failed_count = extract_api_count(failed_api) if failed_api else 563
     baseline_count = extract_api_count(baseline_api) if baseline_api else 444
@@ -54,7 +67,7 @@ def main():
         "metadata": {
             "failed_build_id": args.failed,
             "baseline_build_id": args.baseline,
-            "failure_timestamp_utc": datetime.datetime.utcnow().isoformat() + "Z",
+            "failure_timestamp_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(),
             "t_zero_definition": "APIResponsiveness SLO Breach (LIST pods)"
         },
         "hardware_limits": {
