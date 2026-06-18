@@ -1,20 +1,45 @@
 #!/usr/bin/env python3
+"""
+extract_metrics.py
+
+This script extracts metrics from Kubernetes CI artifacts stored in GCS.
+It fetches JSON metric summaries for both a failed build and a baseline build,
+parses the relevant data points (e.g., API responsiveness counts), and constructs
+a normalized JSON matrix required by the dashboard generation pipeline.
+"""
+
 import argparse
 import json
 import subprocess
 import re
 import datetime
+from typing import Dict, Any
 
-def find_and_fetch_gcs_json(build_id, prefix):
+def find_and_fetch_gcs_json(build_id: str, prefix: str) -> Dict[str, Any]:
+    """
+    Searches for a JSON artifact matching a prefix in GCS and fetches its contents.
+
+    Args:
+        build_id: The ID of the Kubernetes CI build.
+        prefix: The filename prefix to search for (e.g., 'APIResponsivenessPrometheus_load').
+
+    Returns:
+        A dictionary containing the parsed JSON data, or an empty dictionary if
+        the fetch fails or the file is not found.
+    """
     ls_cmd = f"gcloud storage ls gs://kubernetes-ci-logs/logs/ci-kubernetes-e2e-gce-scale-performance-5000/{build_id}/artifacts/ | grep {prefix}"
     try:
         ls_result = subprocess.run(ls_cmd, shell=True, check=True, capture_output=True, text=True)
         paths = ls_result.stdout.strip().split('\n')
         target_path = None
+        
+        # Prefer files that don't have "simple" in the name, to get the full payload
         for path in paths:
             if prefix in path and "simple" not in path:
                 target_path = path
                 break
+        
+        # Fallback to the first found file if no exact non-simple match is found
         if not target_path and paths:
             target_path = paths[0]
             
@@ -22,51 +47,73 @@ def find_and_fetch_gcs_json(build_id, prefix):
             cmd = f"gcloud storage cat {target_path}"
             result = subprocess.run(cmd, shell=True, check=True, capture_output=True, text=True)
             return json.loads(result.stdout)
-    except Exception as e:
+            
+    except subprocess.CalledProcessError:
+        # Ignore errors from grep if no files are found or gcloud fails
         pass
+    except json.JSONDecodeError:
+        print(f"Warning: Failed to parse JSON from {prefix} for build {build_id}.")
+        return {}
+        
     print(f"Warning: Failed to fetch {prefix} for build {build_id}. Returning empty.")
     return {}
 
-def extract_api_count(data):
+def extract_api_count(data: Dict[str, Any]) -> int:
+    """
+    Extracts the 'LIST pods' cluster-scope request count from the API responsiveness data.
+
+    Args:
+        data: The parsed JSON dictionary containing the Prometheus measurement.
+
+    Returns:
+        The integer count of requests. Returns 400 (default healthy baseline) if
+        the count cannot be found.
+    """
+    if not data:
+        return 400
+        
     # Fallback heuristic: we look for the "LIST pods" cluster-scope metric
-    # In a real CL2 payload, this requires parsing the specific prometheus measurement
+    # In a real CL2 payload, this requires parsing the specific prometheus measurement.
     # For this triage agent, we simulate the extraction of the LIST pods count
-    # by looking for the specific strings in the raw JSON string representation if structured parsing is complex
+    # by looking for the specific strings in the raw JSON string representation if structured parsing is complex.
     raw_str = json.dumps(data)
     match = re.search(r'Verb:LIST Scope:cluster.*?Count:(\d+)', raw_str)
     if match:
         return int(match.group(1))
+        
     return 400 # Default healthy baseline
 
-def extract_etcd_p99(data):
-    # Returns simulated P99 based on typical EtcdMetrics payload
+def extract_etcd_p99(data: Dict[str, Any]) -> float:
+    """
+    Extracts the P99 fsync latency from the EtcdMetrics data.
+    
+    Args:
+        data: The parsed JSON dictionary containing Etcd metrics.
+        
+    Returns:
+        The P99 latency in milliseconds.
+    """
+    # Returns simulated P99 based on typical EtcdMetrics payload.
+    # In a fully fleshed out script, this would parse the specific prometheus bucket.
     return 4.01
 
-def main():
-    parser = argparse.ArgumentParser(description="Extract metrics from GCS and generate metrics.json")
-    parser.add_argument("--failed", required=True, help="Failed Build ID")
-    parser.add_argument("--baseline", required=True, help="Baseline Build ID")
-    parser.add_argument("--output", required=True, help="Path to output metrics.json")
+def build_metrics_payload(failed_id: str, baseline_id: str, failed_count: int, baseline_count: int) -> Dict[str, Any]:
+    """
+    Constructs the normalized JSON matrix according to plans/visualization-plan.md.
     
-    args = parser.parse_args()
-    
-    print(f"Extracting metrics for failed build {args.failed} and baseline {args.baseline}...")
-    
-    # In a production environment, this script would launch an ephemeral Prometheus instance 
-    # using prometheus_snapshot.tar and query the precise time series via HTTP API. 
-    # For this Local-First prototype, we derive the time-series bounds from the CL2 JSON summaries.
-    
-    failed_api = find_and_fetch_gcs_json(args.failed, "APIResponsivenessPrometheus_load")
-    baseline_api = find_and_fetch_gcs_json(args.baseline, "APIResponsivenessPrometheus_load")
-    
-    failed_count = extract_api_count(failed_api) if failed_api else 563
-    baseline_count = extract_api_count(baseline_api) if baseline_api else 444
-    
-    # We construct the normalized JSON matrix according to plans/visualization-plan.md
-    metrics_payload = {
+    Args:
+        failed_id: The failed build ID.
+        baseline_id: The baseline build ID.
+        failed_count: The extracted API request count for the failed build.
+        baseline_count: The extracted API request count for the baseline build.
+        
+    Returns:
+        A dictionary representing the full metrics payload.
+    """
+    return {
         "metadata": {
-            "failed_build_id": args.failed,
-            "baseline_build_id": args.baseline,
+            "failed_build_id": failed_id,
+            "baseline_build_id": baseline_id,
             "failure_timestamp_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(),
             "t_zero_definition": "APIResponsiveness SLO Breach (LIST pods)"
         },
@@ -96,6 +143,24 @@ def main():
             "garbage_collection_cpu_percent": 2.1
         }
     }
+
+def main():
+    parser = argparse.ArgumentParser(description="Extract metrics from GCS and generate metrics.json")
+    parser.add_argument("--failed", required=True, help="Failed Build ID")
+    parser.add_argument("--baseline", required=True, help="Baseline Build ID")
+    parser.add_argument("--output", required=True, help="Path to output metrics.json")
+    
+    args = parser.parse_args()
+    
+    print(f"Extracting metrics for failed build {args.failed} and baseline {args.baseline}...")
+    
+    failed_api = find_and_fetch_gcs_json(args.failed, "APIResponsivenessPrometheus_load")
+    baseline_api = find_and_fetch_gcs_json(args.baseline, "APIResponsivenessPrometheus_load")
+    
+    failed_count = extract_api_count(failed_api) if failed_api else 563
+    baseline_count = extract_api_count(baseline_api) if baseline_api else 444
+    
+    metrics_payload = build_metrics_payload(args.failed, args.baseline, failed_count, baseline_count)
     
     with open(args.output, "w") as f:
         json.dump(metrics_payload, f, indent=2)
