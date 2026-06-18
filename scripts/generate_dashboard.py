@@ -178,8 +178,8 @@ def generate_etcd_heatmap(data, output_dir):
         plt.legend()
         
     ax.set_xlabel('Relative Time (seconds)')
-    ax.set_ylabel('Fsync Duration Bucket (seconds)')
-    plt.title('Dimension 5: Etcd Disk IOPS Heatmap')
+    ax.set_ylabel('Disk Save Time (Fsync Bucket)')
+    plt.title('Dimension 5: Etcd Disk Health (Heatmap)\n(Are the hard drives too slow?)')
     plt.tight_layout()
     plt.savefig(os.path.join(output_dir, 'dim5_etcd_heatmap.png'))
     plt.close()
