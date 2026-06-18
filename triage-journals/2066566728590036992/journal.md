@@ -28,6 +28,10 @@ To assess whether this volume is anomalous, we fetched the same metric from a kn
 
 This demonstrates a ~30% abnormal surge in massive `LIST pods` requests, strongly suggesting a Thundering Herd phenomenon occurred, contributing to a 5x increase in requests violating the SLO budget.
 
+*Visual Evidence (Concurrency Surge):*
+This graph visually correlates the massive surge in inflight `LIST` requests (The Thundering Herd) against the normal baseline.
+![Dimension 1: Concurrency Surge](./visualizations/dim1_concurrency.png)
+
 ### 3. Latency vs. Error Budget
 The test suite operates on an error budget. An absolute latency value of 41.48s does not automatically fail the test if the total number of slow requests is small (as seen in the baseline's `SlowCount: 3`). 
 
@@ -36,32 +40,25 @@ However, in this run, the `SlowCount` for `LIST pods` reached 15, and for `PATCH
 ### 4. Competing Hypotheses for the Bottleneck
 At a 5,000-node scale, a cluster-scoped `LIST pods` request is massive. There are several competing hypotheses for what caused the latency to spike to 41 seconds:
 
-*   **Hypothesis A (Strong Indicator: Lock Contention / Channel Blocking):** We initially hypothesized that massive JSON serialization triggered Garbage Collection (GC) churn. However, temporal `.pprof` analysis (`34.75.75.236_kube-apiserver_CPUProfile_load_2026-06-15T19:44:24Z.pprof`) captured during the latency spike makes the GC churn theory less likely. The profile shows 52.49% of all CPU time was spent in `runtime.selectgo` (200.9s cumulative), accompanied by massive lock contention (`runtime.lock2` at 15.89%). This strongly points to channel saturation as a significant bottleneck. The internal `WATCH` event buffers filled up, causing goroutines attempting to enqueue events (`convertToWatchEvent`) to block on mutexes. This channel blocking likely contributed to client watches timing out and dropping, triggering the Thundering Herd.
-*   **Hypothesis B (UNLIKELY): Etcd Saturation.** We hypothesized that the sheer volume of data requested saturated the `etcd` disk IOPS. However, analysis of `EtcdMetrics_load_2026-06-15T19:45:11Z.json` does not support this. Out of ~3.27 million `etcd_disk_wal_fsync_duration_seconds` operations, 3,268,070 completed in under 4ms, and 100% completed in under 64ms. `etcd` was responding extremely fast, suggesting the bottleneck occurred upstream in the API Server.
+#### Hypothesis A (Strong Indicator: Lock Contention / Channel Blocking)
+We initially hypothesized that massive JSON serialization triggered Garbage Collection (GC) churn. However, temporal `.pprof` analysis (`34.75.75.236_kube-apiserver_CPUProfile_load_2026-06-15T19:44:24Z.pprof`) captured during the latency spike makes the GC churn theory less likely. The profile shows 52.49% of all CPU time was spent in `runtime.selectgo` (200.9s cumulative), accompanied by massive lock contention (`runtime.lock2` at 15.89%). This strongly points to channel saturation as a significant bottleneck. The internal `WATCH` event buffers filled up, causing goroutines attempting to enqueue events (`convertToWatchEvent`) to block on mutexes. This channel blocking likely contributed to client watches timing out and dropping, triggering the Thundering Herd.
 
-## 5. Visual Evidence (Newspaper Layout)
-
-The following visualizations were generated from the TSDB metrics and pprof snapshots to visually corroborate the "Thundering Herd" and "Channel Saturation" hypotheses.
-
-### Tier 1: Cross-Subsystem Context
-This graph visually correlates the massive surge in inflight `LIST` requests (The Thundering Herd) against the normal baseline.
-![Dimension 1: Concurrency Surge](./visualizations/dim1_concurrency.png)
-
-### Tier 2: Deep-Dive Telemetry
-
-**API Server CPU Saturation:**
+*Visual Evidence (API Server CPU Saturation):*
 Notice the massive surge in "Core Logic / Lock Contention" at T=0, while Garbage Collection overhead remains relatively low.
 ![Dimension 2: API Server CPU Saturation](./visualizations/dim2_cpu.png)
 
-**The T=0 Bottleneck (Static CPU Profile):**
+*Visual Evidence (The T=0 Bottleneck - Static CPU Profile):*
 At the exact moment of failure, over 68% of the API Server's CPU was consumed entirely by channel blocking (`selectgo`) and mutex locks (`lock2`), proving the system was deadlocked internally, not just busy.
 ![Dimension 3: pprof CPU Profile Snapshot](./visualizations/dim3_pprof_pie.png)
 
-**Memory Exhaustion:**
+*Visual Evidence (Memory Exhaustion):*
 The memory working set spiked as the inflight requests piled up, but it remained well below the critical threshold limit.
 ![Dimension 4: Memory Exhaustion](./visualizations/dim4_memory.png)
 
-**Etcd Disk IOPS (Storage Health):**
+#### Hypothesis B (UNLIKELY): Etcd Saturation
+We hypothesized that the sheer volume of data requested saturated the `etcd` disk IOPS. However, analysis of `EtcdMetrics_load_2026-06-15T19:45:11Z.json` does not support this. Out of ~3.27 million `etcd_disk_wal_fsync_duration_seconds` operations, 3,268,070 completed in under 4ms, and 100% completed in under 64ms. `etcd` was responding extremely fast, suggesting the bottleneck occurred upstream in the API Server.
+
+*Visual Evidence (Etcd Disk IOPS / Storage Health):*
 The P99 Latency line chart proves that the vast majority of `etcd` disk syncs occurred in under 5ms, well below the 50ms critical threshold. `etcd` was not the bottleneck.
 ![Dimension 5: Etcd Disk IOPS (P99 Latency)](./visualizations/dim5_etcd_p99.png)
 
