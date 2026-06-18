@@ -30,7 +30,7 @@ When invoked by the local orchestrator, these agents ingest specific, pre-filter
 To triage effectively, agents need a baseline. Analyzing a single run in isolation often leads to false positives. 
 
 *   **Local Synthesis Database:** After triaging a run (whether it passed or failed), the orchestrator saves a highly compressed, synthesized JSON summary of the run's key metrics, exit codes, and failure signatures to a local directory (e.g., `~/.k8s-triage-history/`).
-*   **Automated Baselining:** When analyzing a new failure, the agent queries this local history to mathematically prove deltas (e.g., "The local history shows successful runs average 400 LIST calls; this failed run had 581, representing a 45% abnormal surge").
+*   **Statistical Baselining:** Rather than comparing against a single "Last Known Good" run (which is vulnerable to natural variance), the agent queries the local history database to aggregate metrics across multiple successful runs over a longer timeframe (e.g., the last two weeks). This establishes a robust mathematical baseline (averages, P90s) to definitively prove anomalies (e.g., "Historical data shows successful runs average 400 LIST calls; this failed run had 581, representing a 45% abnormal surge above the historical average").
 *   **Trend Analysis:** By storing historical signatures, the agent can instantly tell the engineer if the current failure is a known, repeating flake or a novel hard regression.
 
 ## Pillar 4: Engineer-Driven Local Execution (Zero-Infrastructure)

@@ -60,7 +60,7 @@ gemini "Triage build 2066566728590036992 using the local skills and generate a v
 
 **What the Agent Does:**
 1.  **Streams & Filters**: Uses zero-memory pipelines (`gcloud storage cat | grep`) to pull only relevant errors and JSON metrics locally.
-2.  **Baselines**: Fetches a passing run to mathematically prove the anomaly.
+2.  **Statistical Baselining**: Aggregates metrics from multiple recent successful runs over a longer timeframe to establish a robust historical baseline, smoothing out natural variance to mathematically prove anomalies.
 3.  **Analyzes Data**: Analyzes the normalized metrics to formulate a root-cause hypothesis (e.g., observing a flat memory profile to rule out OOMs).
 4.  **Generates Dashboard**: Executes `generate_dashboard.py` to render only the Trellis layout `.png` graphs relevant to proving the hypothesis.
 5.  **Journals**: Synthesizes the findings and visual evidence into a highly readable Markdown report at `triage-journals/[BUILD_ID]/journal.md`.
