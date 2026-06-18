@@ -26,6 +26,10 @@ When invoked by the local orchestrator, these agents ingest specific, pre-filter
 *   **`infra-expert`**: Investigates GCP provisioning and `kubetest2` teardown failures.
 *   **`red-team-reviewer`**: An adversarial agent that prevents the orchestrator from making categorical claims without absolute proof.
 
+### The Principle of Exhaustive Falsification
+A critical design element of this swarm is the enforcement of **Exhaustive Falsification**. LLMs naturally lean toward "Plausible Causality"—stopping an investigation as soon as they find a highly correlated event (e.g., a PR that touches a failing subsystem). 
+To combat this, the architecture forces agents to actively attempt to *disprove* their own hypotheses before concluding a triage run. If an agent blames a specific PR for a regression, it MUST mathematically prove that the exact same failure signature did not intermittently occur in older, historical builds prior to that PR. If an agent blames an OOM kill, it MUST check the node metrics to prove the memory ceiling was actually hit. This turns the swarm from a circumstantial guesser into a rigorous diagnostic engine.
+
 ## Pillar 3: Historical Context & Local Memory
 To triage effectively, agents need a baseline. Analyzing a single run in isolation often leads to false positives. 
 
