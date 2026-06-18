@@ -17,6 +17,7 @@ The 5k-node scalability test failed due to an API Responsiveness SLO breach (p99
 | :--- | :--- |
 | **Machine Type** | `n2-standard-64` (Typical for 5k scale) |
 | **Total CPU Cores** | 64 Cores |
+| **Memory Limit** | 256 GB (API Server `cgroup` limit ~64 GB) |
 | **Storage** | Local NVMe SSD (`etcd` WAL) |
 
 ---
