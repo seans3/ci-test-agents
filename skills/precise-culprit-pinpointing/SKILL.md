@@ -7,7 +7,9 @@ description: Identifies specific code or configuration changes causing regressio
 
 ## Overview
 
-Once a test failure has been definitively classified as a `CODE_REGRESSION` (using the `flakiness-triage` skill), this skill is used to find the exact commit, PR, or configuration change that introduced the bug. 
+Once a test failure has been definitively classified as a `CODE_REGRESSION` (using the `flakiness-triage` skill), this skill is used to find the true root cause. 
+
+**The 'Five Whys' Principle:** A mechanical symptom (like "API Server CPU lock contention" or "OOMKill") is NEVER the true root cause. It is merely a breadcrumb. The true root cause is ALWAYS the specific commit, PR, or configuration change that introduced the mechanical flaw. This skill teaches the agent how to bridge the gap between the mechanical symptom and the source code.
 
 It does this by establishing a "suspect window" between the last known good build and the first known bad build, and then cross-referencing the technical failure signature against the code changes within that window.
 
@@ -18,11 +20,11 @@ It does this by establishing a "suspect window" between the last known good buil
 *   **First Known Bad (FKB):** Identify the oldest build where this exact failure signature first appeared.
 *   **Extract Commits:** The suspect window consists of all commits merged between the LKG and the FKB. Use the `clone-records.json` or `started.json` artifacts from those builds to extract the Git SHAs and determine the diff.
 
-### 2. Extract the Failure Signature
-Determine the specific technical manifestation of the bug. 
-*   Is it an API server Go panic? Extract the stack trace.
+### 2. Extract the Mechanical Symptom (The Breadcrumb)
+Determine the specific technical manifestation of the bug to use as a search filter. 
+*   Is it an API server Go panic? Extract the exact file path and line number from the stack trace.
+*   Is it a `runtime.selectgo` lock contention bottleneck? Note the specific package (e.g., `k8s.io/apiserver/pkg/storage/cacher`).
 *   Is it an APF (API Priority & Fairness) SLO breach? Note the specific resource (e.g., `LIST pods`) that is saturating.
-*   Is it a scheduling failure? Note the specific scheduler plugin that is failing.
 
 ### 3. Correlate Signatures with Commits
 Review the code changes (PR descriptions, file paths, diffs) within the suspect window and correlate them with the failure signature.
