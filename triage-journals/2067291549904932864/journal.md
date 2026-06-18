@@ -6,7 +6,7 @@
 ## Executive Summary
 The 5k-node scalability test failed due to an API Responsiveness SLO breach (p99 `LIST pods` latency hit 43.64s, limit 30s). The failure strongly correlates with a 26.8% volume surge in massive `LIST pods` requests over the Last Known Good baseline, indicating an unexpected drop of active watches triggering a partial "Thundering Herd" reconnection event. Temporal `.pprof` analysis strongly indicates the API Server was bottlenecked by the Go Runtime's internal block profiler (`runtime.saveblockevent` and `runtime.fpTracebackPartialExpand`), which failed to handle the surge in blocked HTTP/2 streams and saturated the global `runtime.lock2` mutex. Using the First Known Bad (FKB) boundary to determine the change window, culprit pinpointing strongly suggests the root cause is **PR #139720** and **PR #139719** (`WatchCache` refactors), which introduced the watch instability.
 
-**Classification:** Outcome B (Code Regression). 
+**Classification:** Code Regression. 
 
 **Key Visual Evidence (The Thundering Herd & CPU Lockup):**
 ![Dimension 1: Concurrency Surge](./visualizations/dim1_concurrency.png)
@@ -65,9 +65,9 @@ Before concluding that a code regression caused the 119 stream disconnects, we e
 
 ---
 
-## Conclusion (Trinary Goal Outcome)
+## Conclusion
 
-Following the Trinary Goal framework, this failure is classified as **Outcome B: Code Regression**. 
+Following the Trinary Goal framework, this failure is classified as a **Code Regression**. 
 
 The mechanical bottleneck was the profiler locking the CPU under load, but the root cause of the load (the 26.8% traffic surge from dropped watches) is traced to a code change. Following the First Known Bad (FKB) rule, we must define the suspect window between the LKG build (`99dad60c3508c8337b5c2eab307033fcfe24fb8c`) and the oldest failing build (`9d6e94a40d9a4f6d1e69a77c9074cab5f32104bf`). 
 

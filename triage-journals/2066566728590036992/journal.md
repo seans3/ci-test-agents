@@ -7,7 +7,7 @@
 ## Executive Summary
 The 5k-node scalability test failed due to an API Responsiveness SLO breach (p99 `LIST pods` latency hit 41.48s, limit 30s). While initial data strongly indicates a "Thundering Herd" of reconnecting clients issuing massive `LIST` requests, our root cause investigation reveals a classic "Observer Effect" triggered by a scaling cliff. Temporal `.pprof` analysis strongly indicates the API Server was heavily bottlenecked by the Go Runtime's internal block profiler (`runtime.saveblockevent` and `runtime.fpTracebackPartialExpand`). Crucially, verification of the cluster setup logs shows this profiling was active in *both* the passing baseline and the failed run. The failure likely occurred because a 30% surge in traffic (The Thundering Herd) pushed the volume of blocked channels past a tipping point, causing the profiler's global mutex (`runtime.lock2`) to lock the CPU. Culprit pinpointing suggests the traffic surge was introduced by **PR #139720** and **PR #139719**, which refactored the API Server `WatchCache`. This appears to be a consistent regression; the subsequent build (`2067291549904932864`) also failed with the exact same signature.
 
-**Classification:** Outcome B (Code Regression). Recommending review/revert of the `WatchCache` refactoring PRs that triggered the initial watch disconnects.
+**Classification:** Code Regression. Recommending review/revert of the `WatchCache` refactoring PRs that triggered the initial watch disconnects.
 
 **Key Visual Evidence (The Thundering Herd & CPU Lockup):**
 ![Dimension 1: Concurrency Surge](./visualizations/dim1_concurrency.png)
@@ -90,9 +90,9 @@ The P99 Latency line chart indicates that the vast majority of `etcd` disk syncs
 
 ---
 
-## Conclusion (Trinary Goal Outcome)
+## Conclusion
 
-Following the Trinary Goal framework, this failure is classified as **Outcome B: Code Regression**. 
+Following the Trinary Goal framework, this failure is classified as a **Code Regression**. 
 
 While the direct mechanical cause of the failure appears to be an "Observer Effect" (the profiler locked the CPU), we must consider *why* the traffic surged by 30% to trigger the profiler. 
 
