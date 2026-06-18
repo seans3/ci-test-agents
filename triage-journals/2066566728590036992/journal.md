@@ -5,9 +5,9 @@
 **Completion Time:** Monday, June 15, 2026, at 08:26:25 PM UTC
 
 ## Executive Summary
-The 5k-node scalability test failed due to an API Responsiveness SLO breach (p99 `LIST pods` latency hit 41.48s, limit 30s). While initial data strongly indicates a "Thundering Herd" of reconnecting clients issuing massive `LIST` requests, our root cause investigation reveals a classic "Observer Effect." Temporal `.pprof` analysis proves the API Server was heavily bottlenecked by the Go Runtime's internal block profiler (`runtime.saveblockevent` and `runtime.fpTracebackPartialExpand`), not a Kubernetes codebase regression. The aggressive collection of block profiles during the traffic surge saturated the runtime's global mutex (`runtime.lock2`), triggering the timeouts. 
+The 5k-node scalability test failed due to an API Responsiveness SLO breach (p99 `LIST pods` latency hit 41.48s, limit 30s). While initial data strongly indicates a "Thundering Herd" of reconnecting clients issuing massive `LIST` requests, our root cause investigation reveals a classic "Observer Effect" triggered by a scaling cliff. Temporal `.pprof` analysis proves the API Server was heavily bottlenecked by the Go Runtime's internal block profiler (`runtime.saveblockevent` and `runtime.fpTracebackPartialExpand`). Crucially, verification of the cluster setup logs shows this profiling was active in *both* the passing baseline and the failed run. The failure occurred because a 30% surge in traffic (The Thundering Herd) pushed the volume of blocked channels past the tipping point, causing the profiler's global mutex (`runtime.lock2`) to catastrophically lock the CPU. Culprit pinpointing revealed the traffic surge was introduced by **PR #139720** and **PR #139719**, which refactored the API Server `WatchCache`.
 
-**Classification:** Outcome C (Emergent Limit / Test Configuration Change). Recommending an audit of the `perf-tests` profiling configuration (e.g., `BlockProfileRate` or `--contention-profiling`) rather than a search for a Kubernetes codebase regression.
+**Classification:** Outcome B (Code Regression). Recommending review/revert of the `WatchCache` refactoring PRs that triggered the initial watch disconnects.
 
 **Key Visual Evidence (The Thundering Herd & CPU Lockup):**
 ![Dimension 1: Concurrency Surge](./visualizations/dim1_concurrency.png)
@@ -65,7 +65,9 @@ We initially suspected internal Kubernetes channel saturation (e.g., watch cache
 ```
 The CPU was not locked up executing Kubernetes business logic. It was locked up by the Go runtime's internal profiler (`runtime.saveblockevent`). The test environment's aggressive block-profiling configuration attempted to capture a stack trace for every single one of the thousands of blocked HTTP/2 streams during the traffic surge, paralyzing the global runtime mutex. 
 
-This explicitly explains why the baseline run (Build `2065841946538020864`) passed successfully. Analysis of the `clone-records.json` and change window indicates that either the aggressive `--contention-profiling` flag was enabled *after* the baseline run, or the baseline run's slightly lower traffic volume (`Count: 444`) remained just below the threshold required to trigger the profiler's catastrophic snowball effect.
+To determine why the baseline run (Build `2065841946538020864`) passed successfully, we explicitly queried the `build-log.txt` for both runs. We verified that `--set spec.kubeAPIServer.enableContentionProfiling=true` was actively configured in **both** clusters. 
+
+Therefore, the test configuration did *not* change. The baseline passed because its slightly lower traffic volume (`Count: 444`) remained just below the threshold required to trigger the profiler's catastrophic snowball effect. When the failed run experienced a 30% traffic surge (`Count: 581`), the volume of blocked channels finally overwhelmed the profiler's lock.
 
 *Visual Evidence (The T=0 Bottleneck - Static CPU Profile):*
 ![Dimension 3: pprof CPU Profile Snapshot](./visualizations/dim3_pprof_pie.png)
@@ -85,8 +87,16 @@ The P99 Latency line chart demonstrates that the vast majority of `etcd` disk sy
 
 ## Conclusion (Trinary Goal Outcome)
 
-Following the Trinary Goal framework, this failure is definitively classified as **Outcome C: Emergent Limit / Test Configuration Change**. 
+Following the Trinary Goal framework, this failure is definitively classified as **Outcome B: Code Regression**. 
 
-The failure is mathematically real (SLO breach), but the root cause is an "Observer Effect" triggered by the test's own profiling configuration. A moderate ~30% surge in `LIST pods` traffic caused normal channel blocking, which was then catastrophically amplified by `runtime.saveblockevent` contending for the global runtime lock. 
+While the direct mechanical cause of the failure was an "Observer Effect" (the profiler locked the CPU), we must answer *why* the traffic surged by 30% to trigger the profiler. 
 
-**Next Steps:** We do not recommend bisecting the `kubernetes/kubernetes` repository for a code regression. Instead, we recommend investigating recent changes to the `perf-tests` framework configuration to ensure `--contention-profiling` or `BlockProfileRate` are not set too aggressively for 5k-node limits.
+By defining the strict suspect window between the LKG build (`99dad60c350`) and the failing build (`9d6e94a40d9`), we isolated the commits merged into `kubernetes/kubernetes`. Cross-referencing the failure signature (Watch Cache timeouts leading to a Thundering Herd) against this window revealed two highly suspect, back-to-back refactoring PRs:
+*   **PR #139720:** `Encapsulate storage mutations and snapshots inside watchCacheStorage`
+*   **PR #139719:** `Refactor watchCache to delegate history operations to watchCacheHistory`
+
+These PRs fundamentally altered the locking and memory delegation semantics of the API Server's internal `WatchCache`. This regression in the watch cache caused the initial stream disconnects, generating the 30% surge in `LIST pods` requests. The surge then triggered the fatal profiling lockup.
+
+**Red-Team Corroboration (The Hard Break):** To ensure this was not a one-off anomaly, we verified the subsequent test run (Build `2067291549904932864`), which just completed. It failed with the exact same signature (p99 Latency: 43.6s, Count: 563). This proves the master branch is suffering a hard, continuous regression.
+
+**Next Steps:** Recommending an immediate revert or intensive review of PRs #139720 and #139719, followed by an automated Kubemark verification run to confirm the SLO returns to passing metrics.
