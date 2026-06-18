@@ -52,6 +52,11 @@ The data extraction scripts will output a unified JSON matrix. To render compara
 
 To ensure the failure is immediately understandable to Kubernetes engineers who may lack deep expertise in specific subsystems (e.g., APF, scale testing), while still providing the rigorous telemetry required by domain experts, the visual dashboard is structured in a "Newspaper Layout". It begins with cross-subsystem context mapping and progressively discloses deep, expert-level telemetry.
 
+**Dynamic Layout Prioritization:** The agent MUST dynamically alter the vertical order of the visualizations based on the primary failure mode it identifies. Do not force an engineer to scroll past 5 API Server charts if the cluster died due to a network partition. 
+*   *If `INFRA_FLAKE` / Network Partition:* Elevate the Node Readiness Heatmap (4.2) to the top of Tier 1.
+*   *If Component Crash:* Elevate the Event Scatter-Plot (4.1) showing the panic/OOMkill to the top.
+*   *If Control-Plane Overload:* Use the default layout, leading with Concurrency and CPU Saturation.
+
 ### Tier 1: Cross-Subsystem Context
 **Target Audience:** General Kubernetes engineers, contributors outside the failing subsystem.
 **Goal:** Answer "What broke and what is the blast radius?" in 30 seconds by visually bridging subsystem silos.
