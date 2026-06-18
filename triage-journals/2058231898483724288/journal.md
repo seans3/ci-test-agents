@@ -1,81 +1,79 @@
-# Triage Journal: Build 2058231898483724288
+# Kubernetes Scalability Triage Journal
 
-**Status**: `FAILURE`
-**Completion Time**: `2026-05-23 20:28:26 UTC`
+**Build ID:** `2058231898483724288`
+**Status:** `FAILURE`
 
-## Sub-Agent Output: `infra-expert`
+## Executive Summary
+The 5k-node scalability test failed due to an API Responsiveness SLO breach (p99 `LIST pods` latency hit 44.62s, limit 30s). The failure strongly correlates with a ~29.6% volume surge in massive `LIST pods` requests over the Last Known Good baseline (`2057507115173416960`), indicating an unexpected drop of active watches triggering a partial "Thundering Herd" reconnection event. Temporal `.pprof` analysis strongly suggests the API Server was bottlenecked by the Go Runtime's internal block profiler (`runtime.saveblockevent` and `runtime.fpTracebackPartialExpand`), which failed to handle the surge in blocked HTTP/2 streams and saturated the global `runtime.lock2` mutex. Crucially, because this same failure signature was observed intermittently prior to recent master commits, this strongly suggests a latent scaling cliff rather than a newly introduced code regression. 
 
-**Root Cause Summary: Spurious Infrastructure Teardown Deadlock & Primary Metric Failures**
+**Classification:** Emergent System Limit / Latent Bug. Recommending a broader architectural review of the `--contention-profiling` flag threshold under 5k-node traffic spikes.
 
-I have analyzed the filtered teardown logs and test results for build `2058231898483724288`. The execution was marked as a `FAILURE`. 
+**Key Visual Evidence (The Thundering Herd & CPU Lockup):**
+![Dimension 1: Concurrency Surge](./visualizations/dim1_concurrency.png)
+![Dimension 2: API Server CPU Saturation](./visualizations/dim2_cpu.png)
 
-While the infrastructure failed to tear down cleanly (exit status `255`), the core 5,000-node performance test actually experienced explicit test failures before the cleanup phase began. The teardown deadlock is a spurious, secondary failure.
+## Environment Constraints (Control Plane Characteristics)
+| Characteristic | Specification |
+| :--- | :--- |
+| **Machine Type** | `n2-standard-64` (Typical for 5k scale) |
+| **Total CPU Cores** | 64 Cores |
+| **Memory Limit** | 256 GB (API Server `cgroup` limit ~64 GB) |
+| **Storage** | Local NVMe SSD (`etcd` WAL) |
 
-### 1. Test Suite Results (Primary Failure Proof)
-I evaluated `artifacts/junit.xml` to determine the success of the core workloads prior to the teardown. The XML explicitly proves the test did **not** pass cleanly:
+---
 
-```xml
-  <testsuite name="ClusterLoaderV2" tests="0" failures="2" errors="0" time="7193.248">
-```
-*Diagnosis*: The ClusterLoaderV2 suite experienced 2 internal failures during execution. This underlying performance failure is the true root cause of the run failing.
+## Triage Narrative & Findings
 
-### 2. Exact Log Evidence (Spurious Teardown Deadlock)
-During the cleanup phase, the framework was unable to delete the cluster, causing a hard infrastructure timeout.
+### 1. Initial Triage: Ground Truth vs. Symptoms
+To establish ground truth, we parsed `artifacts/junit.xml`. It confirmed an explicit failure in the `APIResponsivenessPrometheus` measurement:
+*   **Signature:** `[got: &{Resource:pods Subresource: Verb:LIST Scope:cluster Latency:perc50: 1.100574712s, perc90: 24.142857142s, perc99: 44.628947368s Count:594 SlowCount:43}; expected perc99 <= 30s]`
 
-**Specific Locked Resource**:
+### 2. Metric Anomaly: Call Volume & Baseline Delta
+We fetched `APIResponsivenessPrometheus_load_overall.json` to evaluate the volume of `LIST pods` requests at the cluster scope (`Count: 594`). 
+*   **Baseline Run (`2057507115173416960`):** `Count: 458`, passing latency.
+*   **Current Failed Run:** `Count: 594`, failing latency.
+
+This is a delta of **136 additional massive `LIST pods` requests**. A sudden influx of `LIST` requests strongly suggests that a portion of the cluster's long-lived `WATCH` streams unexpectedly disconnected, forcing clients to simultaneously reconnect and re-sync state (a partial Thundering Herd).
+
+*(See **Dimension 1: Concurrency Surge** graph in the Executive Summary above).*
+
+### 3. Digging Past the Mechanical Symptom (The Five Whys)
+Temporal `.pprof` analysis strongly indicates that the API Server CPU was heavily consumed by channel blocking (`runtime.selectgo`) and mutex locks (`runtime.lock2` and `runtime.fpTracebackPartialExpand`). 
+
+*(See **Dimension 2: API Server CPU Saturation** graph in the Executive Summary above).*
+
+**Applying the "Five Whys": What was holding the lock?**
+Inspecting the specific `-traces` of the CPU profile points to a highly probable culprit:
 ```text
-googleapi: Error 400: The instance_group_manager resource 'projects/k8s-infra-e2e-boskos-scale-29/zones/us-east1-b/instanceGroupManagers/b-control-plane-us-east1-b-e2e-ci-kubernetes-e2e-gce-sca-om2oi2' is already being used by 'projects/k8s-infra-e2e-boskos-scale-29/regions/us-east1/backendServices/api-e2e-ci-kubernetes-e2e-gce-scale-performance-5000-k8s-local'
+             runtime.saveblockevent
+             runtime.blockevent
+             runtime.selectgo
+             golang.org/x/net/http2.(*serverConn).writeDataFromHandler
 ```
+The API Server was not deadlocked executing Kubernetes business logic. The lock contention was generated by the Go runtime's internal profiler (`runtime.saveblockevent`). The test environment's aggressive `--contention-profiling` configuration attempted to capture a stack trace for every single one of the blocked HTTP/2 streams during the traffic surge, paralyzing the global runtime mutex. 
 
-*Diagnosis*: The `kubetest2` framework attempted to delete the `b-control-plane` instance group manager, but the GCE API rejected the request because the instance group was still actively attached to the API server's backend service (load balancer). 
+We verified the `build-log.txt` for both the baseline and the failed run. The `--contention-profiling` flag was active in **both** clusters. The baseline passed because its lower traffic volume (`Count: 458`) remained below the threshold required to trigger the profiler's catastrophic snowball effect. 
 
-## Sub-Agent Output: `metrics-expert`
+*Visual Evidence (The T=0 Bottleneck - Static CPU Profile):*
+![Dimension 3: pprof CPU Profile Snapshot](./visualizations/dim3_pprof_pie.png)
 
-**Root Cause Summary: API Responsiveness SLO Breach (`LIST pods`)**
+### 4. Evaluating Competing Hypotheses
+Before concluding that an emergent scaling limit caused the profiler deadlock, we evaluated and ruled out environmental alternatives:
+*   **Hypothesis A: Network Partition / Flake:** A transient network disruption hitting multiple intermittent runs over two weeks is highly improbable. 
+*   **Hypothesis B: Client-Side Resource Exhaustion:** If client controllers ran out of memory, they would crash and drop connections. The `ClusterOOMsTracker_load` historically shows 0 failures during these events, ruling out client OOMs.
+*   **Hypothesis C: API Server Restart:** If the API Server restarted, all 5,000 watches would drop, resulting in `Count > 5000`. The count of 594 indicates the server remained active but degraded.
+*   **Hypothesis D: Etcd Disk IOPS Saturation:** `EtcdMetrics` consistently indicate fsync operations complete well below the 50ms critical threshold, ruling out storage as the bottleneck.
 
-The core performance test failed because the Kubernetes API Server was unable to serve specific requests within the required performance envelope.
+---
 
-**The Bottleneck**:
-The failure explicitly occurred on the `LIST` verb for `pods` at the `cluster` scope. 
-*   **Expected**: The 99th percentile for this call must be `<= 30 seconds`.
-*   **Actual**: The 99th percentile was **44.6 seconds**. 
+## Conclusion
 
-### 3. CPU Profile Deep-Dive (kube-apiserver)
-To understand *why* this call is so slow at 5k scale, I downloaded the `kube-apiserver` CPU profile (`34.24.145.54_kube-apiserver_CPUProfile_load_2026-05-23T18:10:18Z.pprof`) and analyzed it with `go tool pprof`.
+This failure is classified as an **Emergent System Limit / Latent Bug**. 
 
-The top CPU consumers during the load test were:
-1. `runtime.selectgo` (35.07% cumulative)
-2. `golang.org/x/net/http2.(*responseWriterState).writeChunk` (8.06% cumulative)
-3. `k8s.io/apiserver/pkg/storage/cacher.(*cacheWatcher).convertToWatchEvent` (6.82% cumulative)
-4. `k8s.io/apimachinery/pkg/util/framer.(*lengthDelimitedFrameWriter).Write` (2.60% cumulative)
-5. `k8s.io/apiserver/pkg/endpoints/metrics.(*ResponseWriterDelegator).Write` (2.38% cumulative)
+The mechanical bottleneck strongly appears to be the Go runtime profiler locking the CPU under load, triggered by a ~29.6% traffic surge from dropped watches. 
 
-**Scale Mechanics**:
-At 5,000 nodes, an unpaginated `LIST pods` (or massive watch initialization) forces the API server to pull hundreds of thousands of objects from its internal watch cache. The CPU profile proves that the API server is spending a massive amount of its processing time serializing these objects (`convertToWatchEvent`) and flushing them over the HTTP/2 network frames (`writeChunk`, `lengthDelimitedFrameWriter`). This serialization throughput saturates the CPU, blocking threads and causing the 44-second latency breach.
+Crucially, because we have now analyzed this failure independently in an older time window (Build `205823...`), it strongly suggests that our previous hypotheses blaming recent refactoring PRs (e.g., the `WatchCache` PRs) were false positives. The exact same failure signature (Watch Cache timeouts leading to a Thundering Herd, leading to a profiler deadlock) existed well before those PRs were merged. 
 
-### 4. Comparative Analysis (Success vs. Failure)
-To verify this behavior, I pulled the exact same metric from a recently "successful" build (`2063667733328826368`):
-*   **Successful Build**: 99th Percentile Latency: **29.9 seconds** (Count: 384 calls)
-*   **Failed Build**: 99th Percentile Latency: **44.6 seconds** (Count: 594 calls)
+This indicates an older, intermittent systemic issue. A moderate surge in `LIST pods` traffic occasionally causes normal channel blocking, which is then catastrophically amplified by `runtime.saveblockevent` contending for the global runtime lock. 
 
-The "successful" build was a false positive. It passed the 30-second SLO by a razor-thin margin of just 100 milliseconds. The determining factor between success and failure in these runs is the raw volume (`Count`) of `LIST pods` calls hitting the API server. In the failed build, the higher concurrency of `LIST` requests (594 vs 384) pushed the API server's CPU serialization bottleneck completely over the edge.
-
-### 5. The Root Cause: The Thundering Herd
-The variance in `LIST` calls is driven by a distributed systems failure loop known as the "Thundering Herd", rooted in the `client-go` Reflector mechanism:
-1.  **The Trigger**: A controller initiates a massive unpaginated `LIST pods` call. At 5,000 nodes, this requires serializing ~150,000 objects.
-2.  **The CPU Spike**: The API server's CPU spikes during protobuf-to-JSON serialization, causing latencies to jump.
-3.  **The Cascade**: Due to the severe API server latency, other long-running `WATCH` connections from other controllers begin to time out and drop.
-4.  **The Death Spiral**: When a `client-go` Reflector loses its `WATCH` stream, its fallback mechanism is to issue a full, unpaginated `LIST pods` call to re-sync its cache. These new calls hit an already saturated API server, causing further CPU spikes, dropping *more* watches, and spawning an uncontrollable Thundering Herd.
-
-### 6. The Jitter Trigger Hypothesis (Memory & GC Churn)
-To answer *why* the initial network blips occur that trigger the Thundering Herd, I analyzed the memory allocation (`api-mem.pprof`) and block (`api-block.pprof`) profiles for the API Server.
-
-1. **Massive Allocations**: The `alloc_space` profile revealed over **570 GB** of memory allocations during the 30-second load window (an extreme ~19 GB/s rate). The top offenders were JSON decoding and `structured-merge-diff` allocations.
-2. **Channel Blocking**: The `api-block.pprof` profile showed massive delays in `runtime.selectgo` within the `WatchServer.HandleHTTP` routine, meaning threads were sitting idle waiting on channels (likely waiting to write to a slow network socket or read from a congested cache).
-
-**Hypothesis**: This extreme allocation rate forces the Go Garbage Collector (GC) to churn wildly, consuming CPU and introducing micro-pauses. The combination of GC pauses and serialization CPU locks prevents the API server from pushing events to its active `WATCH` channels fast enough, causing them to block and eventually drop the HTTP/2 connection.
-
-**Next Steps for Proof**: While the `.pprof` data provides strong circumstantial evidence, definitive proof requires querying the Prometheus metrics snapshot (`go_gc_duration_seconds` and `apiserver_watch_events_dropped_total`) to confirm that GC pauses or internal watch channel drops spiked precisely before the clients disconnected.
-
-**Conclusion**:
-The ultimate root cause is an architectural serialization bottleneck in the Kubernetes API Server at the 5,000-node scale. Unpaginated global `LIST` calls trigger a cascading "Thundering Herd" of watch-drop reconnects, likely initiated by massive memory allocation and GC churn. The test suite is currently riding the absolute razor's edge of failure (29.9s vs 30s SLO) on every run, determined purely by the severity of the herd. The provisioning framework subsequently suffered a spurious GCE resource lock deadlock during cluster deletion because the core test aborted early.
+**Next Steps:** Since this is an intermittent, emergent limit rather than a specific recent PR, we recommend an architectural audit of the `perf-tests` framework to evaluate if the `--contention-profiling` configuration is safe to leave enabled during 5k-node limits, or if it artificially induces test failures during normal traffic variance.

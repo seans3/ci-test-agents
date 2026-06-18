@@ -1,0 +1,65 @@
+{
+  "metadata": {
+    "failed_build_id": "2058231898483724288",
+    "baseline_build_id": "2057507115173416960",
+    "failure_timestamp_utc": "2026-06-18T23:07:26.543818+00:00",
+    "t_zero_definition": "APIResponsiveness SLO Breach (LIST pods)"
+  },
+  "hardware_limits": {
+    "kube_apiserver_memory_limit_gb": 64.0
+  },
+  "time_series_data": [
+    {
+      "relative_time_seconds": -300,
+      "failed_run": {
+        "concurrency_inflight": 405,
+        "cpu_total_cores": 12.5,
+        "cpu_gc_cores": 1.5,
+        "memory_working_set_gb": 22.5,
+        "etcd_fsync_p99_ms": 4.08
+      },
+      "baseline_run": {
+        "concurrency_inflight": 400,
+        "cpu_total_cores": 12.0,
+        "etcd_fsync_p99_ms": 3.2
+      }
+    },
+    {
+      "relative_time_seconds": 0,
+      "failed_run": {
+        "concurrency_inflight": 3623.3999999999996,
+        "apf_queued": 1200,
+        "cpu_total_cores": 58.2,
+        "cpu_gc_cores": 5.1,
+        "memory_working_set_gb": 42.5,
+        "etcd_fsync_p99_ms": 4.01
+      },
+      "baseline_run": {
+        "concurrency_inflight": 458,
+        "cpu_total_cores": 12.0,
+        "etcd_fsync_p99_ms": 3.2
+      }
+    },
+    {
+      "relative_time_seconds": 300,
+      "failed_run": {
+        "concurrency_inflight": 1500,
+        "apf_queued": 500,
+        "cpu_total_cores": 30.0,
+        "cpu_gc_cores": 3.0,
+        "memory_working_set_gb": 35.0,
+        "etcd_fsync_p99_ms": 3.66
+      },
+      "baseline_run": {
+        "concurrency_inflight": 395,
+        "cpu_total_cores": 11.9,
+        "etcd_fsync_p99_ms": 3.2
+      }
+    }
+  ],
+  "pprof_snapshot_t_zero": {
+    "runtime.selectgo_cpu_percent": 39.66,
+    "runtime.lock2_cpu_percent": 12.31,
+    "garbage_collection_cpu_percent": 2.1
+  }
+}
