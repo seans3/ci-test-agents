@@ -61,19 +61,28 @@ def generate_cpu_plot(data, output_dir):
     
     total_cpu = np.array([tick["failed_run"].get("cpu_total_cores", 0) for tick in time_series])
     gc_cpu = np.array([tick["failed_run"].get("cpu_gc_cores", 0) for tick in time_series])
+    baseline_cpu = np.array([tick.get("baseline_run", {}).get("cpu_total_cores", 0) for tick in time_series])
     
     # Calculate non-GC CPU for the stack
     non_gc_cpu = total_cpu - gc_cpu
     non_gc_cpu = np.maximum(non_gc_cpu, 0) # ensure no negatives
 
-    fig, ax = plt.subplots()
-    ax.stackplot(times, gc_cpu, non_gc_cpu, labels=['GC Cores', 'Core Logic / Other'], colors=['salmon', 'steelblue'])
-    ax.axvline(0, color='black', linestyle=':', label='T=0')
+    fig, ax = plt.subplots(figsize=(10, 6))
+    ax.stackplot(times, gc_cpu, non_gc_cpu, labels=['Garbage Collection Overhead', 'Core Logic / Lock Contention'], colors=['salmon', 'steelblue'], alpha=0.8)
+    
+    if any(baseline_cpu):
+        ax.plot(times, baseline_cpu, color='gray', linestyle='--', linewidth=2, label='Baseline Total CPU (Healthy)')
+        
+    ax.axvline(0, color='black', linestyle=':', linewidth=2, label='T=0 (Traffic Spike)')
 
     ax.set_xlabel('Relative Time (seconds)')
     ax.set_ylabel('CPU Cores')
-    ax.legend(loc='upper left')
-    plt.title('Dimension 2: API Server CPU Saturation')
+    ax.set_ylim(0, 64) # Max cores
+    
+    # Place legend (the 'table' box) outside the plot if it's blocking data, or keep it upper left with a frame
+    ax.legend(loc='upper left', frameon=True, shadow=True, title="CPU Consumption Breakdown")
+    
+    plt.title('Dimension 2: API Server CPU Saturation\n(What was the CPU doing when it locked up?)')
     plt.tight_layout()
     plt.savefig(os.path.join(output_dir, 'dim2_cpu.png'))
     plt.close()
