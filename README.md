@@ -6,6 +6,13 @@ Instead of relying on heavy, centralized CI/CD infrastructure, this project util
 
 ---
 
+## 🎯 The Ultimate Goal (Actionable Triage)
+The entire architecture exists to produce a single, actionable, binary outcome for the performance engineer. At the end of its investigation, the swarm MUST definitively prove one of two things:
+1.  **It is an Infrastructure Flake:** The failure was caused by underlying cloud or pipeline flakiness (e.g., GCE quotas, network partitions). The agent proves the core software is healthy, allowing the engineer to safely ignore the failure or click "Retest."
+2.  **It is a Code Regression (And Here is the PR):** The failure is a genuine degradation in the codebase. The agent mathematically proves the regression against a baseline, diagnoses the mechanical bottleneck (e.g., lock contention), and pinpoints the exact Pull Request in the change window that introduced the flaw, allowing the engineer to instantly click "Revert."
+
+---
+
 ## 🚀 The Local-First Architecture
 
 To prevent LLM context-window exhaustion and host machine Out-Of-Memory (OOM) errors, the swarm relies on strict procedural knowledge and data normalization.
