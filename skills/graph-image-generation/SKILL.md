@@ -12,15 +12,15 @@ Transform a curated JSON matrix of Kubernetes metrics into a suite of highly acc
 Because this repository uses the **Local-First Architecture**, the agent should NOT attempt to generate raw Mermaid.js charts or write its own plotting scripts. You MUST use the pre-built Python visualization tool provided in the repository.
 
 ## 1. Prepare the JSON Payload
-Before running the visualization script, you must curate the extracted TSDB metrics, `.pprof` data, and baseline deltas into a `mock_data.json` file. 
+Before running the visualization script, you must curate the extracted TSDB metrics, `.pprof` data, and baseline deltas into a run-specific `metrics.json` file located in the specific triage journal directory (e.g., `triage-journals/[BUILD_ID]/metrics.json`). DO NOT use a global or mock data file.
 *   **Format:** The JSON must match the exact schema defined in `plans/visualization-plan.md`. 
 *   **Time-Alignment:** Ensure all metrics are zero-indexed relative to the failure event (`T=0`).
 
 ## 2. Execute the Dashboard Script
 Invoke the `scripts/generate_dashboard.py` script.
-*   **DO** pass the JSON payload file as the first argument.
+*   **DO** pass the run-specific JSON payload file as the first argument.
 *   **DO** pass the desired output directory (e.g., `triage-journals/[BUILD_ID]/visualizations`) as the second argument.
-*   *Example Command:* `python3 scripts/generate_dashboard.py scripts/mock_data.json triage-journals/12345/visualizations`
+*   *Example Command:* `python3 scripts/generate_dashboard.py triage-journals/12345/metrics.json triage-journals/12345/visualizations`
 
 ## 3. Embed in the Newspaper Layout
 Once the script successfully generates the 5 `.png` dimensions, you must embed them directly into the final `journal.md` report.
