@@ -43,7 +43,7 @@ To assess whether this volume is anomalous, we fetched the same metric from a kn
 *   **Baseline Run:** `Count: 444`, `SlowCount: 3`
 *   **Failed Run:** `Count: 581`, `SlowCount: 15`
 
-This demonstrates a ~30% abnormal surge in massive `LIST pods` requests, strongly suggesting a Thundering Herd phenomenon occurred, contributing to a 5x increase in requests violating the SLO budget.
+This represents a delta of **137 additional `LIST pods` requests** over the baseline. While it does not represent the entire 5,000-node cluster disconnecting, this ~30% abnormal surge in massive `LIST` requests strongly suggests a partial "Thundering Herd" phenomenon occurred, which was enough to contribute to a 5x increase in requests violating the SLO budget.
 
 *(See **Dimension 1: Concurrency Surge** graph in the Executive Summary above).*
 
