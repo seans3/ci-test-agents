@@ -19,6 +19,7 @@ It does this by establishing a "suspect window" between the last known good buil
 *   **Last Known Good (LKG):** Identify the most recent build where the test passed successfully.
 *   **First Known Bad (FKB):** Identify the oldest build where this exact failure signature first appeared.
 *   **Extract Commits:** The suspect window consists of all commits merged between the LKG and the FKB. Use the `clone-records.json` or `started.json` artifacts from those builds to extract the Git SHAs and determine the diff.
+*   **DO NOT Use Arbitrary Time Windows:** Never assume a fixed time window (e.g., "commits from the last 24 hours"). Massive periodic jobs may only run every 48 hours, or a test may remain broken for days before triage. The window MUST be defined strictly by the LKG and FKB build data.
 
 ### 2. Extract the Mechanical Symptom (The Breadcrumb)
 Determine the specific technical manifestation of the bug to use as a search filter. 
