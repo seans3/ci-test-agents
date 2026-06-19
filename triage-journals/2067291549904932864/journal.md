@@ -42,12 +42,17 @@ The test environment's aggressive `--contention-profiling` configuration attempt
 ### 2. Finding the True Unknown (The `watch-list` Anomaly)
 To determine what caused the sudden surge of blocked HTTP/2 streams, we queried the `kube-apiserver.log` to identify exactly which `userAgent` was issuing the anomalous load. 
 
-By applying the Principle of Exhaustive Falsification across three failed runs and three successful baseline runs, we found a massive, definitive anomaly stemming from a test utility pod called `watch-list`:
+By applying the Principle of Exhaustive Falsification across multiple historical runs, we found a massive, definitive anomaly stemming from a test utility pod called `watch-list`:
 
 *   **Successful Runs (Healthy Baseline):**
-    *   2063667733328826368: 192 `watch-list` LIST requests
-    *   2062942951578800128: 199 `watch-list` LIST requests
-    *   2057507115173416960: 192 `watch-list` LIST requests
+    *   2065841946538020864: 672 `watch-list` LIST requests (Duration: ~169m) *[High load, but SLO survived]*
+    *   2061131017258799104: 210 `watch-list` LIST requests (Duration: ~164m)
+    *   2062942951578800128: 199 `watch-list` LIST requests (Duration: ~169m)
+    *   2063667733328826368: 192 `watch-list` LIST requests (Duration: ~154m)
+    *   2057507115173416960: 192 `watch-list` LIST requests (Duration: ~171m)
+    *   2061493408802803712: 190 `watch-list` LIST requests (Duration: ~158m)
+    *   2060406235777208320: 190 `watch-list` LIST requests (Duration: ~158m)
+    *   2059681452215242752: 171 `watch-list` LIST requests (Duration: ~154m)
 *   **Failed Runs (Spamming LISTs):**
     *   2064392517519937536: 852 `watch-list` LIST requests (Duration: ~230m)
     *   2067291549904932864: 784 `watch-list` LIST requests (Duration: ~196m)
