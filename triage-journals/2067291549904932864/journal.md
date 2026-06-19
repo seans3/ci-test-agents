@@ -102,4 +102,11 @@ err = wait.PollUntilContextCancel(ctx, 5*time.Second, true, func(ctx context.Con
 ```
 Because of this coding error, the `watch-list` pod is an infinite loop that deliberately destroys its own watch connections via `cancelInformers()` and re-syncs them (issuing a massive `LIST pods` request) every 5 seconds!
 
-**Next Steps:** The mechanical bottleneck is the profiler lockup, but the *initial trigger* is the `watch-list` test utility pod acting as a pathological client. We strongly recommend a dual-pronged fix: 1) Disable `--contention-profiling` at 5k-node scales to mitigate the fatal lockup, and 2) Submit a PR to `kubernetes/perf-tests` fixing the `watch-list` utility so it blocks cleanly instead of repeatedly dropping its watches every 5 seconds.
+**The Death Spiral (Why Some Runs Succeed):**
+If this loop executes constantly, why do some runs pass? We analyzed the total test duration and the lifecycle of the `watch-list` utility. The `watch-list` module is only deployed during a specific intermediate phase of the load test. 
+*   **In successful runs:** The cluster is healthy, so it completes this phase in ~27 minutes. The buggy loop only executes ~190 times before the pod is deleted. The API server survives.
+*   **In failed runs:** If the cluster is even slightly slower, this phase takes longer. But because `watch-list` is an infinite loop, *running longer means it generates exponentially more load*. This extra load slows the cluster down further, which forces the phase to take even longer, causing even more `LIST` requests (up to 800+). 
+
+This creates a catastrophic positive feedback loop. The cluster enters a "Death Spiral" of increasing load until the API server channels block, the Go Profiler (`--contention-profiling=true`) attempts to capture the stack traces, seizes the global `runtime.lock2` mutex, and crashes the node.
+
+**Next Steps:** The mechanical bottleneck is the profiler lockup, but the *initial trigger* is the `watch-list` test utility pod acting as a pathological client in a death spiral. We strongly recommend a dual-pronged fix: 1) Disable `--contention-profiling` at 5k-node scales to mitigate the fatal lockup, and 2) Submit a PR to `kubernetes/perf-tests` fixing the `watch-list` utility so it blocks cleanly instead of repeatedly dropping its watches every 5 seconds.
