@@ -5,7 +5,7 @@
 **Status:** `FAILURE`
 
 ## Executive Summary
-The 5k-node scalability test failed due to an API Responsiveness SLO breach (p99 `LIST pods` latency hit 43.64s, limit 30s). After extensive Red-Team falsification, we have definitively ruled out recent `WatchCache` PRs and normal cluster operations. The root cause lies within the `perf-tests` load generation framework itself (specifically, the `watch-list` utility pod). 
+The 5k-node scalability test failed due to an API Responsiveness SLO breach (p99 `LIST pods` latency hit 43.64s, limit 30s). After extensive cross-verification, we have definitively ruled out recent `WatchCache` PRs and normal cluster operations. The root cause lies within the `perf-tests` load generation framework itself (specifically, the `watch-list` utility pod). 
 
 The `watch-list` utility is an explicitly designed stress test that deliberately destroys and recreates its watches every 5 seconds. This design creates a catastrophic **Death Spiral**: if the cluster is even slightly slow, the test phase takes longer, causing `watch-list` to stay alive longer. Because it is an infinite loop tied to the phase duration, staying alive longer means it spams exponentially more `LIST pods` requests, bogging down the cluster further. This runaway positive feedback loop eventually saturates the API Server channels, triggering the Go runtime profiler (`--contention-profiling=true`) to seize the global `runtime.lock2` mutex, completely crashing the node.
 
@@ -60,7 +60,7 @@ By applying the Principle of Exhaustive Falsification across multiple historical
     *   2065117162749562880: 732 `watch-list` LIST requests (Duration: ~180m)
     *   2058231898483724288: 514 `watch-list` LIST requests (Duration: ~206m)
 
-### 3. Red-Team Deep Dive: The watch-list Stress Test
+### 3. In-Depth Analysis: The watch-list Stress Test
 We audited the source code of this utility (`k8s.io/perf-tests/util-images/watch-list/main.go`) and discovered that the 5-second teardown loop is not a bug, but an explicit design choice. The utility is designed to act as an aggressive stress-test generator. 
 
 As stated in its own `README.md`: *"Starts X number of informers... and waits until they are fully synchronised. Then the test is repeated until specified timeout has elapsed."*
