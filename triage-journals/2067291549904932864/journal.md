@@ -54,35 +54,37 @@ By applying the Principle of Exhaustive Falsification across three failed runs a
     *   2065117162749562880: 732 `watch-list` LIST requests (Duration: ~180m)
     *   2058231898483724288: 514 `watch-list` LIST requests (Duration: ~206m)
 
-### 3. Red-Team Deep Dive: The Source Code Bug
-We audited the source code of this utility (`k8s.io/perf-tests/util-images/watch-list/main.go`) and found a catastrophic logical bug. The utility intends to start informers and keep them running. However, it uses `wait.PollUntilContextCancel` and intentionally returns `false, nil` after successfully syncing the cache. 
+### 3. Red-Team Deep Dive: The watch-list Stress Test
+We audited the source code of this utility (`k8s.io/perf-tests/util-images/watch-list/main.go`) and discovered that the 5-second teardown loop is not a bug, but an explicit design choice. The utility is designed to act as an aggressive stress-test generator. 
 
-*Visual Evidence (Source Code Bug in perf-tests):*
+As stated in its own `README.md`: *"Starts X number of informers... and waits until they are fully synchronised. Then the test is repeated until specified timeout has elapsed."*
+
+*Visual Evidence (Intentional Load Generation in perf-tests):*
 ```go
 err = wait.PollUntilContextCancel(ctx, 5*time.Second, true, func(ctx context.Context) (bool, error) {
     ctxInformer, cancelInformers := context.WithCancel(ctx)
-    defer cancelInformers() // <--- BUG: This cancels the context and drops the watch!
+    defer cancelInformers() // <--- Intentional teardown
     
     informersSynced, err := startInformersForResource(...)
     cache.WaitForCacheSync(ctx.Done(), informersSynced...)
     
-    return false, nil // <--- BUG: This forces the loop to restart every 5 seconds
+    return false, nil // <--- Forces the loop to repeat every 5 seconds
 })
 ```
-Because of this coding error, the `watch-list` pod is an infinite loop that deliberately destroys its own watch connections via `cancelInformers()` and re-syncs them (issuing a massive `LIST pods` request) every 5 seconds.
+By design, the `watch-list` pod runs an infinite loop that deliberately destroys its own watch connections via `cancelInformers()` and re-syncs them (issuing massive `LIST pods` requests) every 5 seconds. It is designed to hammer the API Server with watch initialization load.
 
 ### 4. The Positive Feedback Loop (Why Some Runs Succeed)
-The `watch-list` module is only deployed during a specific intermediate phase of the load test. 
-*   **In successful runs:** The cluster processes the load quickly, completing the phase in ~27 minutes. The buggy loop only executes ~190 times before the `watch-list` pod is deleted. The API server survives.
-*   **In failed runs:** If the cluster is even slightly slower, this phase takes longer. But because `watch-list` is an infinite loop, *running longer means it generates exponentially more load*. This extra load slows the cluster down further, which forces the phase to take even longer, causing even more `LIST` requests (up to 800+). 
+The `watch-list` module is deployed during an intermediate phase of the load test. 
+*   **In successful runs:** The cluster processes the load quickly, completing the phase in ~27 minutes. The stress-test loop executes ~190 times before the `watch-list` pod is naturally deleted by the test framework. The API server absorbs this expected load.
+*   **In failed runs:** If the cluster is even slightly slower, this phase takes longer. Because `watch-list` is an infinite loop tied to the duration of the phase, *running longer means it generates exponentially more load*. This extra load slows the cluster down further, which forces the phase to take even longer, causing even more `LIST` requests (up to 800+). 
 
 This creates the Death Spiral. The load continuously compounds until the API Server channels become completely saturated, triggering the fatal profiler lockup.
 
 ---
 
 ## Conclusion & Next Steps
-The mechanical bottleneck is the profiler lockup, but the *initial trigger* is the `watch-list` test utility pod acting as a pathological client, amplifying minor latency variance into a fatal death spiral. 
+The mechanical bottleneck is the profiler lockup, and the *initial trigger* is the `watch-list` utility acting exactly as designed (as a stress test), but inadvertently amplifying minor latency variance into a fatal death spiral when the test runs long. 
 
 We strongly recommend a dual-pronged fix: 
-1. **Disable `--contention-profiling`** at 5k-node scales to immediately mitigate the fatal lockup.
-2. **Submit a PR to `kubernetes/perf-tests`** fixing the `watch-list` utility so it blocks cleanly instead of repeatedly dropping its watches every 5 seconds.
+1. **Disable `--contention-profiling`** at 5k-node scales to immediately mitigate the fatal lockup caused by the high volume of blocked channels during stress tests.
+2. **Submit a PR to `kubernetes/perf-tests`** to cap the maximum number of iterations or put a hard time limit on the `watch-list` utility, preventing it from entering a runaway positive feedback loop when the cluster is running slow.
