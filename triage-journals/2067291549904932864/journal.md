@@ -86,4 +86,20 @@ To find the universal trigger, we queried the API Server logs across three faile
     *   2062942951578800128: 199 `watch-list` LIST requests
     *   2057507115173416960: 192 `watch-list` LIST requests
 
-**Next Steps:** The mechanical bottleneck is the profiler lockup, but the *initial trigger* is the `watch-list` test utility pod exhibiting pathological behavior (spamming 3-4x more `LIST` requests during failed runs). We strongly recommend a dual-pronged investigation: 1) Disable `--contention-profiling` at 5k-node scales to mitigate the fatal lockup, and 2) Investigate the `watch-list` utility in `kubernetes/perf-tests` to determine why it intermittently drops its watches and spams reconnection requests under load.
+We then audited the source code of this utility (`k8s.io/perf-tests/util-images/watch-list/main.go`) and found a catastrophic logical bug. The utility intends to start informers and keep them running. However, it uses `wait.PollUntilContextCancel` and intentionally returns `false, nil` after successfully syncing the cache. 
+
+*Visual Evidence (Source Code Bug in perf-tests):*
+```go
+err = wait.PollUntilContextCancel(ctx, 5*time.Second, true, func(ctx context.Context) (bool, error) {
+    ctxInformer, cancelInformers := context.WithCancel(ctx)
+    defer cancelInformers() // <--- BUG: This cancels the context and drops the watch!
+    
+    informersSynced, err := startInformersForResource(...)
+    cache.WaitForCacheSync(ctx.Done(), informersSynced...)
+    
+    return false, nil // <--- BUG: This forces the loop to restart every 5 seconds
+})
+```
+Because of this coding error, the `watch-list` pod is an infinite loop that deliberately destroys its own watch connections via `cancelInformers()` and re-syncs them (issuing a massive `LIST pods` request) every 5 seconds!
+
+**Next Steps:** The mechanical bottleneck is the profiler lockup, but the *initial trigger* is the `watch-list` test utility pod acting as a pathological client. We strongly recommend a dual-pronged fix: 1) Disable `--contention-profiling` at 5k-node scales to mitigate the fatal lockup, and 2) Submit a PR to `kubernetes/perf-tests` fixing the `watch-list` utility so it blocks cleanly instead of repeatedly dropping its watches every 5 seconds.
