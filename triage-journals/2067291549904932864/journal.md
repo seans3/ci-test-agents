@@ -72,11 +72,18 @@ This failure is classified as an **Emergent System Limit / Latent Bug**.
 
 The mechanical bottleneck strongly appears to be the Go runtime profiler locking the CPU under load, triggered by a 26.8% traffic surge from dropped watches. 
 
-Crucially, deep-dive analysis of the client-side logs (`kube-controller-manager.log`) immediately preceding the latency spike (`T=0`) proves that these initial watch disconnects were NOT caused by a code regression (such as the recent `WatchCache` refactoring PRs). We found the true smoking gun on the client side: 56 explicit errors indicating the EndpointSlice controller's cache had fallen behind, forcing it to drop its connection and issue a full re-sync via `LIST` requests.
+Crucially, deep-dive analysis of the logs immediately preceding the latency spike (`T=0`) proves that these initial watch disconnects were NOT caused by a code regression (such as the recent `WatchCache` refactoring PRs). We initially suspected the `EndpointSlice` controller after finding cache desync errors, but applying the Principle of Exhaustive Falsification across multiple historical runs disproved this: several other failures exhibited identical latency spikes with ZERO `EndpointSlice` errors. 
 
-*Visual Evidence (Controller Manager Log - Cache Desync):*
-```text
-I0617 19:05:18.897025 12 endpointslice_controller.go:358] "Error syncing endpoint slices for service, retrying" key="test-4e8otb-48/small-service-102" err="EndpointSlice informer cache is out of date"
-```
+**Red-Team Deep Dive (The True Trigger):**
+To find the universal trigger, we queried the API Server logs across three failed runs and three successful runs, specifically filtering for the `userAgent` issuing the anomalous `LIST pods` requests. We found a massive, definitive anomaly stemming from a test utility pod called `watch-list` (from the `perf-tests` load module):
 
-**Next Steps:** The mechanical bottleneck was the profiler lockup, but the *initial trigger* was the `EndpointSlice` controller's informer cache falling out of date under load. We strongly recommend an immediate architectural audit to 1) disable `--contention-profiling` at 5k-node scales (to mitigate the fatal lockup), and 2) investigate why the EndpointSlice controller is failing to keep up with the API Server's event stream during normal 5k-node load testing.
+*   **Failed Runs (Spamming LISTs):**
+    *   2067291549904932864: 784 `watch-list` LIST requests
+    *   2066566728590036992: 794 `watch-list` LIST requests
+    *   2058231898483724288: 514 `watch-list` LIST requests
+*   **Successful Runs (Healthy Baseline):**
+    *   2063667733328826368: 192 `watch-list` LIST requests
+    *   2062942951578800128: 199 `watch-list` LIST requests
+    *   2057507115173416960: 192 `watch-list` LIST requests
+
+**Next Steps:** The mechanical bottleneck is the profiler lockup, but the *initial trigger* is the `watch-list` test utility pod exhibiting pathological behavior (spamming 3-4x more `LIST` requests during failed runs). We strongly recommend a dual-pronged investigation: 1) Disable `--contention-profiling` at 5k-node scales to mitigate the fatal lockup, and 2) Investigate the `watch-list` utility in `kubernetes/perf-tests` to determine why it intermittently drops its watches and spams reconnection requests under load.
