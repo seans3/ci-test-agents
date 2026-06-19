@@ -72,7 +72,7 @@ You must understand the following strict directory topology to locate files quic
 
     **MANDATORY JOURNAL FORMAT**:
     The `journal.md` file MUST follow this structure:
-    *   **Header**: Include the Build ID, Status, and a human-readable **Completion Time** (convert the Unix `timestamp` found in `finished.json` to a standard UTC date/time string).
+    *   **Header**: Include the Build ID, Date (convert the Unix `timestamp` found in `started.json` or `finished.json` to a standard UTC date/time string, e.g., `2026-06-17 17:01:59 UTC`), and Status.
     *   **Executive Summary**: A brief (1-3 sentence) summary at the very beginning stating the identified root cause of the failure.
     *   **Triage Narrative**: A step-by-step narrative describing the entire debug process. You must explain your reasoning: why you looked at a certain file, what that file indicated, and why that clue led you to the next step (e.g., "Because the junit.xml showed 2 failures, it indicated the teardown timeout was a secondary symptom, leading us to examine the Prometheus metrics...").
     *   **Supporting Evidence**: Within the narrative, you MUST include the exact details of the artifacts used:
