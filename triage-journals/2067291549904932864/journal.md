@@ -48,9 +48,11 @@ By applying the Principle of Exhaustive Falsification across three failed runs a
     *   2062942951578800128: 199 `watch-list` LIST requests
     *   2057507115173416960: 192 `watch-list` LIST requests
 *   **Failed Runs (Spamming LISTs):**
-    *   2067291549904932864: 784 `watch-list` LIST requests
-    *   2066566728590036992: 794 `watch-list` LIST requests
-    *   2058231898483724288: 514 `watch-list` LIST requests
+    *   2064392517519937536: 852 `watch-list` LIST requests (Duration: ~230m)
+    *   2067291549904932864: 784 `watch-list` LIST requests (Duration: ~196m)
+    *   2066566728590036992: 794 `watch-list` LIST requests (Duration: ~204m)
+    *   2065117162749562880: 732 `watch-list` LIST requests (Duration: ~180m)
+    *   2058231898483724288: 514 `watch-list` LIST requests (Duration: ~206m)
 
 ### 3. Red-Team Deep Dive: The Source Code Bug
 We audited the source code of this utility (`k8s.io/perf-tests/util-images/watch-list/main.go`) and found a catastrophic logical bug. The utility intends to start informers and keep them running. However, it uses `wait.PollUntilContextCancel` and intentionally returns `false, nil` after successfully syncing the cache. 

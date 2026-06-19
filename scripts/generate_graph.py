@@ -2,17 +2,17 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 # Data
-runs = ['2067... (Fail)', '2066... (Fail)', '2058... (Fail)', '2063... (Success)', '2062... (Success)', '2057... (Success)']
-durations = [196, 204, 206, 154, 169, 171]
-list_requests = [784, 794, 514, 192, 199, 192]
+runs = ['2064... (Fail)', '2058... (Fail)', '2066... (Fail)', '2067... (Fail)', '2065... (Fail)', '2057... (Success)', '2062... (Success)', '2063... (Success)']
+durations = [230.7, 206.2, 204.6, 196.0, 179.9, 171.1, 169.4, 154.2]
+list_requests = [852, 514, 794, 784, 732, 192, 199, 192]
 
 x = np.arange(len(runs))  # the label locations
 width = 0.35  # the width of the bars
 
-fig, ax1 = plt.subplots(figsize=(10, 6))
+fig, ax1 = plt.subplots(figsize=(12, 6))
 
 color = 'tab:red'
-ax1.set_xlabel('Build ID')
+ax1.set_xlabel('Build ID (Sorted by Duration)')
 ax1.set_ylabel('Total Test Duration (minutes)', color=color)
 rects1 = ax1.bar(x - width/2, durations, width, label='Duration', color=color, alpha=0.7)
 ax1.tick_params(axis='y', labelcolor=color)
