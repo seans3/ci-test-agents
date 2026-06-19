@@ -4,9 +4,9 @@
 **Status:** `FAILURE`
 
 ## Executive Summary
-The 5k-node scalability test failed due to an API Responsiveness SLO breach (p99 `LIST pods` latency hit 43.64s, limit 30s). After extensive Red-Team falsification, we have definitively ruled out recent `WatchCache` PRs and normal cluster operations. The root cause is a catastrophic logical bug within the `perf-tests` load generation framework itself (specifically, the `watch-list` utility pod). 
+The 5k-node scalability test failed due to an API Responsiveness SLO breach (p99 `LIST pods` latency hit 43.64s, limit 30s). After extensive Red-Team falsification, we have definitively ruled out recent `WatchCache` PRs and normal cluster operations. The root cause lies within the `perf-tests` load generation framework itself (specifically, the `watch-list` utility pod). 
 
-A coding error in `watch-list/main.go` creates an infinite loop that deliberately destroys and recreates its watches every 5 seconds. This creates a **Death Spiral**: if the cluster is even slightly slow, the test takes longer, causing `watch-list` to stay alive longer. Because it is an infinite loop, staying alive longer means it spams exponentially more `LIST pods` requests, bogging down the cluster further. This positive feedback loop eventually saturates the API Server channels, triggering the Go runtime profiler (`--contention-profiling=true`) to seize the global `runtime.lock2` mutex, completely crashing the node.
+The `watch-list` utility is an explicitly designed stress test that deliberately destroys and recreates its watches every 5 seconds. This design creates a catastrophic **Death Spiral**: if the cluster is even slightly slow, the test phase takes longer, causing `watch-list` to stay alive longer. Because it is an infinite loop tied to the phase duration, staying alive longer means it spams exponentially more `LIST pods` requests, bogging down the cluster further. This runaway positive feedback loop eventually saturates the API Server channels, triggering the Go runtime profiler (`--contention-profiling=true`) to seize the global `runtime.lock2` mutex, completely crashing the node.
 
 **Classification:** Emergent System Limit / Latent Bug (Testing Framework). 
 
