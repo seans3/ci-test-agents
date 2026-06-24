@@ -30,8 +30,7 @@ By evaluating historical runs, we discovered that while this architectural bottl
 
 To empirically prove this, we compared the API Server heap profiles (`go_memstats_heap_inuse_bytes`) and the metrics dump before and after the flag rollout:
 *   **Structural Heap Growth**: Peak heap utilization stepped up roughly 10GB (from ~45-48GB to ~53-61GB). The object graph reveals this growth is entirely structural. The new containers decode into many more small live Go objects (`Container`, `ContainerStatus`, etc.), causing the memory path for processing watch events (`watchChan.serialProcessEvents`) to jump from consuming 25% of the live heap to 36%.
-*   **Lifecycle Churn**: The new init containers sleep and flip the pod between ready/not-ready states more frequently.
-*   **Endpointslice Metric Jump**: The raw metrics dump proves that the absolute volume of endpointslice changes stepped up from a baseline of ~64K to 90-125K per run exactly when the flag was turned on (April 27).
+*   **Lifecycle Churn & Endpointslice Metric Jump**: The new init containers (which each execute a 1s sleep) and sidecar cause the pods to take longer to go ready and flip between ready/not-ready states more frequently. We can empirically observe the impact of this behavioral change in the raw metrics dump: the absolute volume of endpointslice changes stepped up from a baseline of ~64K to 90-125K per run exactly when the flag was turned on (April 27).
 *   These extra endpointslice changes fed directly into the 5,317x fan-out, generating the 680M wakeups that heavily contended the Go scheduler lock.
 
 ### 4. The Vicious Feedback Loop
