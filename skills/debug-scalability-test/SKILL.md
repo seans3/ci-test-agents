@@ -29,6 +29,7 @@ Based on the filtered evidence, delegate analysis to the appropriate specialized
 Before saving the final journal, you MUST pass your drafted triage report to the **`red-team-reviewer`** sub-agent.
 *   The `red-team-reviewer` acts as an adversarial, highly skeptical performance engineer. Its purpose is to find logical gaps, confounding variables, missing baselines, or unproven categorical statements.
 *   **Mandatory Saturation Challenge**: Instruct the reviewer to aggressively attack any claims of "resource saturation" (e.g., CPU, Disk IO). It must demand proof from absolute utilization metrics to ensure the system wasn't actually suffering from scheduler starvation (high run-queue, idle cores) instead of true saturation.
+*   **Tone & Timeline Audit**: Instruct the reviewer to aggressively reject any journal using absolute, categorical language (e.g., "proves", "definitively"). It must also reject any journal that blames a PR for a failure if that failure signature existed *before* the PR was merged.
 *   You must address all flaws identified by the reviewer, which may require fetching additional metrics to strengthen your evidence.
 
 ### 4. Mandatory Dashboard Generation
