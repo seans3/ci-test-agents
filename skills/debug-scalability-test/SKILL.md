@@ -31,8 +31,13 @@ Before saving the final journal, you MUST pass your drafted triage report to the
 *   **Mandatory Saturation Challenge**: Instruct the reviewer to aggressively attack any claims of "resource saturation" (e.g., CPU, Disk IO). It must demand proof from absolute utilization metrics to ensure the system wasn't actually suffering from scheduler starvation (high run-queue, idle cores) instead of true saturation.
 *   You must address all flaws identified by the reviewer, which may require fetching additional metrics to strengthen your evidence.
 
-### 4. Journaling and Synthesis
-After passing the red-team review, save the final, synthesized root-cause report to `./triage-journals/[BUILD_ID]/journal.md`.
+### 4. Mandatory Dashboard Generation
+Before finalizing the journal, you MUST extract the TSDB metrics and generate visual graphs:
+*   You must query the true metrics from the `prometheus_snapshot.tar` or JSON files. Do NOT use fake fallback data.
+*   Render the visualizations to explicitly prove your mechanical bottleneck (e.g., plot `go_sched_goroutines_runnable` vs CPU utilization to prove starvation).
+
+### 5. Journaling and Synthesis
+After passing the red-team review and generating the dashboard, save the final, synthesized root-cause report to `./triage-journals/[BUILD_ID]/journal.md`. Embedded visualizations are MANDATORY.
 
 **Mandatory Journal Format:**
 *   **Header**: Build ID, Status, and human-readable Completion Time (converted from Unix timestamp).
