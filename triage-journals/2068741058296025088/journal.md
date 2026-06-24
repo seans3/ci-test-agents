@@ -5,9 +5,9 @@
 **Status:** `FAILURE`
 
 ## Executive Summary
-The 5k-node scalability test failed due to an API Responsiveness SLO breach (p99 `LIST pods` latency hit 36.16s, limit 30s). The true root cause is a code regression introduced by PR #36900 (`CL2_REALISTIC_POD`). This PR triggered a massive increase in endpointslice watch wakeups, completely burying the Go scheduler. The API Server was not CPU-bound; rather, the Go runtime's global scheduler lock was paralyzed by hundreds of millions of goroutine wakeups, leaving 80 cores idle while requests starved in the run queue.
+The 5k-node scalability test failed due to an API Responsiveness SLO breach (p99 `LIST pods` latency hit 36.16s, limit 30s). The true root cause is an architectural scale limit regarding how Kubernetes handles endpointslice watch fan-out, which completely buried the Go scheduler. The API Server was not CPU-bound; rather, the Go runtime's global scheduler lock was paralyzed by hundreds of millions of goroutine wakeups, leaving 80 cores idle while requests starved in the run queue. While PR #36900 (`CL2_REALISTIC_POD`) significantly aggravated the issue, historical data proves the failures predate this PR, confirming the root cause is the emergent system limit combined with a positive feedback loop.
 
-**Classification:** Code Regression (PR #36900) / Go Scheduler Starvation
+**Classification:** Emergent System Limit (Architectural Scale Limit) / Go Scheduler Starvation
 
 ## Absolute Metric Proof: Go Scheduler Starvation
 
@@ -25,8 +25,8 @@ The `junit.xml` confirmed the failure was a `LIST pods` SLO breach (p99 of 36.16
 ### 2. The Driver: Endpointslice Fan-out
 The massive scheduler queue was driven by pure overhead: waking parked goroutines for watch events. Every single endpointslice change wakes up 5,317 clients (one `kube-proxy` on every node + CoreDNS pods). Over this run, ~261,000 endpointslice changes turned into **680 million goroutine wakeups**, accounting for 77% of all watch wakeups on the apiserver. 
 
-### 3. The Culprit (The "Why"): PR #36900 (`CL2_REALISTIC_POD`)
-By evaluating historical runs and recent changes, we isolated the root cause to PR #36900 (`CL2_REALISTIC_POD`). While this PR did not increase the overall payload size of pods (~6.5KB before and after), it fundamentally changed their lifecycle by adding 2 init containers and a sidecar. 
+### 3. The Aggravating Factor: PR #36900 (`CL2_REALISTIC_POD`)
+By evaluating historical runs, we discovered that while this architectural bottleneck existed previously (with failures predating April 17), it was massively exacerbated by PR #36900 (`CL2_REALISTIC_POD`). While this PR did not increase the overall payload size of pods (~6.5KB before and after), it fundamentally changed their lifecycle by adding 2 init containers and a sidecar. 
 *   This caused pods to take longer to go ready and flip between ready/not-ready states more frequently.
 *   This directly drove up the raw volume of endpointslice changes from a baseline of ~64K to 90-125K per run. 
 *   These extra endpointslice changes fed directly into the 5,317x fan-out, generating the 680M wakeups that crushed the Go scheduler lock.
