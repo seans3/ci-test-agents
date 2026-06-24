@@ -67,14 +67,15 @@ gemini "Triage build 2066566728590036992 using the local skills and generate a v
 
 ---
 
-## 🔎 Real-World Case Study: The "Thundering Herd"
+## 🔎 Real-World Case Study: Diagnosing the Go Scheduler Wakeup Storm
 
-During the development of this swarm, manual engineering triage incorrectly assumed that recent 5k-node test failures were due to a GCE infrastructure deadlock. 
+During the development of this swarm, initial automated and manual triage incorrectly assumed that recent 5k-node test failures were due to CPU saturation and a "Thundering Herd" of `LIST` requests. 
 
-When the autonomous swarm was executed against these runs, it exposed a radically different truth:
+However, deeper investigation revealed a much more complex systemic bottleneck:
 
-1.  **The Primary Failure**: The `junit.xml` proved the tests actually failed earlier due to an API Responsiveness SLO breach (99th percentile for `LIST pods` reached 41 seconds).
-2.  **The Bottleneck**: The agent analyzed the API Server CPU `.pprof` file and proved that the server was spending 68% of its CPU cycle completely locked up in channel queues (`runtime.selectgo`) and mutexes.
-3.  **The "Thundering Herd"**: The swarm analyzed successful vs. failed runs and found that successful runs averaged ~400 `LIST` calls, while the failed run saw a surge to ~3,450. The agent deduced that internal API channels blocked, forcing `client-go` connections to drop. When those connections dropped, the clients reconnected simultaneously, issuing massive unpaginated `LIST pods` calls—a classic "Thundering Herd" that completely destroyed the API Server's CPU.
+1.  **The Primary Failure**: The tests failed due to an API Responsiveness SLO breach (99th percentile for `LIST pods` reached 35-58 seconds).
+2.  **The True Bottleneck (Scheduler Starvation)**: The apiserver was actually severely underutilized, with ~80 out of 96 cores sitting idle. The bottleneck was the Go scheduler's global lock.
+3.  **The Wakeup Storm**: Every endpointslice change woke up ~5,300 watchers (kube-proxy and CoreDNS). Over a run, this resulted in ~261,000 changes producing 680 million goroutine wakeups. The Go runtime could not place goroutines onto idle cores fast enough, causing massive run-queue backlogs.
+4.  **The Victim**: The `LIST pods` request was not the cause, but the victim. It was getting preempted and pushed to the back of the massive queue hundreds of times, stretching a 10-second operation into 40+ seconds.
 
-The swarm automatically identified this complex failure, rendered the visual proof, and documented it flawlessly.
+This complex case study highlights the importance of looking beyond superficial resource metrics and analyzing the underlying mechanical behavior of the runtime and system architecture at massive scale.
