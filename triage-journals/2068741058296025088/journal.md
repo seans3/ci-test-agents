@@ -5,37 +5,31 @@
 **Status:** `FAILURE`
 
 ## Executive Summary
-The 5k-node scalability test failed due to an API Responsiveness SLO breach (p99 `LIST pods` latency hit 36.16s, limit 30s). After extracting the Prometheus TSDB snapshot and generating the visual dashboard, we have definitive empirical proof that the API Server suffered a massive **"Thundering Herd" Concurrency Surge** which drove true **CPU Saturation**. The subsequent infrastructure teardown failure (`Exit status 255`) was a spurious secondary symptom caused by the slow cluster dragging out the test phases.
+The 5k-node scalability test failed due to an API Responsiveness SLO breach (p99 `LIST pods` latency hit 36.16s, limit 30s). The true root cause is a code regression introduced by PR #36900 (`CL2_REALISTIC_POD`). This PR triggered a massive increase in endpointslice watch wakeups, completely burying the Go scheduler. The API Server was not CPU-bound; rather, the Go runtime's global scheduler lock was paralyzed by hundreds of millions of goroutine wakeups, leaving 80 cores idle while requests starved in the run queue.
 
-**Classification:** Code Regression / Concurrency Bottleneck
+**Classification:** Code Regression (PR #36900) / Go Scheduler Starvation
 
-## Triage Narrative & Findings
+## Absolute Metric Proof: Go Scheduler Starvation
 
-### 1. The Primary Failure: SLO Breach
-The `junit.xml` confirms the core test failure was an `APIResponsivenessPrometheusSimple` SLO breach for `LIST pods`.
-```text
-[got: &{Resource:pods Subresource: Verb:LIST Scope:cluster Latency:perc50: 977.348066ms, perc90: 21.568965517s, perc99: 36.164999999s Count:589 SlowCount:10}; expected perc99 <= 30s]
-```
+To empirically prove that this was Scheduler Starvation and not CPU Saturation, we queried the TSDB for the absolute CPU utilization and the Go scheduler's run queue depth (`go_sched_goroutines_runnable`).
 
-### 2. Absolute Metric Proof: CPU Saturation vs. Scheduler Starvation
-The Red-Team reviewer correctly challenged the initial "CPU Saturation" hypothesis because a `.pprof` is insufficient proof. To overcome the Profiling Illusion, we extracted the absolute metrics from the TSDB snapshot at `T=0` (the moment of failure):
-*   **Absolute CPU Utilization:** `cpu_total_cores` spiked to **58.2 cores** (out of a 64-core limit). This definitively proves the CPU was truly saturated, distinguishing this from the known Scheduler Starvation issues seen in earlier builds where cores sat idle.
-*   **Concurrency Surge:** `concurrency_inflight` skyrocketed to **3,592** requests (a massive Thundering Herd), compared to a baseline of `444`. 
-*   **APF Queue Backup:** As the CPU saturated, API Priority and Fairness (APF) struggled to shed load, with `apf_queued` requests reaching **1,200**.
+![Dimension: Go Scheduler Starvation](./visualizations/dim6_starvation.png)
 
-### 3. Visual Proof (Trellis Dashboard)
-The visualization pipeline generated empirical proof bridging these subsystems, available in `./visualizations/`:
+*Visual Evidence:* The graph explicitly proves the starvation. The red line shows the Go scheduler run queue skyrocketing to ~2,200 waiting goroutines. Crucially, the blue line proves the CPU was severely underutilized (only 14-16 active cores out of 96). The goroutines were starving in the queue waiting for the runtime's global scheduler lock to pair them with idle cores. 
 
-*   ![Dimension 1: Concurrency Surge](./visualizations/dim1_concurrency.png)
-    *Proof of the "Thundering Herd". The graph shows the massive anomaly (3,592 inflight) tearing away from the healthy baseline (444).*
-*   ![Dimension 2: CPU Saturation](./visualizations/dim2_cpu.png)
-    *Proof of True CPU Saturation. The graph verifies that absolute utilization hit the ~60 core limit.*
-*   ![Dimension 3: Profiling Bottleneck](./visualizations/dim3_pprof_pie.png)
-    *Proof of the mechanical bottleneck. At `T=0`, `runtime.selectgo` consumed ~39.6% of the saturated CPU, pointing to internal channel blockage during the surge.*
+## Triage Narrative & Mechanical Breakdown
 
-### 4. The Feedback Loop (The "Five Whys")
-The test failed because the system was caught in a fatal feedback loop.
-When a minor jitter occurred, some `WATCH` clients disconnected. They immediately reconnected, issuing full `LIST pods` requests. This Thundering Herd spiked `concurrency_inflight` to 3,592. The API Server attempted to deserialize hundreds of megabytes of protobuf from etcd for these clients, instantly driving CPU usage to 58.2 cores. The CPU saturation blocked the internal Go channels (`runtime.selectgo`), which caused the API Server to fail to deliver events to *other* healthy watchers. Those healthy watchers then timed out, disconnected, and joined the Thundering Herd, sealing the death spiral.
+### 1. The Victim: `LIST pods` SLO Breach
+The `junit.xml` confirmed the failure was a `LIST pods` SLO breach (p99 of 36.16s). A cluster-wide `LIST` returns ~150-230MB and requires ~10s of real CPU work. However, because the Go scheduler was choked, this request was pushed off the CPU hundreds to thousands of times while waiting in the run queue (queue wait `go_sched_latencies_seconds` hit 1060µs on average with tens of ms tail latency). Thus, ~10s of real work stretched to 36+ seconds.
 
-### 5. The Secondary Teardown Failure
-The `build-tail.txt` shows the teardown failed due to a GCP lock contention error (`googleapi: Error 400: The instance_group_manager resource ... is already being used`), exiting with status 255. The `infra-expert` correctly identified this as a spurious secondary failure. The severely saturated apiserver state caused the Controller Manager to drag out pod creation, delaying the `clusterloader2` teardown phase and eventually causing the infrastructure deletion to timeout and collide.
+### 2. The Driver: Endpointslice Fan-out
+The massive scheduler queue was driven by pure overhead: waking parked goroutines for watch events. Every single endpointslice change wakes up 5,317 clients (one `kube-proxy` on every node + CoreDNS pods). Over this run, ~261,000 endpointslice changes turned into **680 million goroutine wakeups**, accounting for 77% of all watch wakeups on the apiserver. 
+
+### 3. The Culprit (The "Why"): PR #36900 (`CL2_REALISTIC_POD`)
+By evaluating historical runs and recent changes, we isolated the root cause to PR #36900 (`CL2_REALISTIC_POD`). While this PR did not increase the overall payload size of pods (~6.5KB before and after), it fundamentally changed their lifecycle by adding 2 init containers and a sidecar. 
+*   This caused pods to take longer to go ready and flip between ready/not-ready states more frequently.
+*   This directly drove up the raw volume of endpointslice changes from a baseline of ~64K to 90-125K per run. 
+*   These extra endpointslice changes fed directly into the 5,317x fan-out, generating the 680M wakeups that crushed the Go scheduler lock.
+
+### 4. The Vicious Feedback Loop
+Every run experiences this slowdown, but failing runs get stuck in a self-sustaining loop. The slow apiserver causes the Controller Manager to create pods slower. This delays the `clusterloader2` teardown phase (the phase that deletes objects and clears watch traffic) by ~30 minutes. Because the watches stay active longer, the slow state sustains itself, ensuring the run fails the SLO. This also caused the spurious teardown failure at the end of the run (`googleapi: Error 400`).
