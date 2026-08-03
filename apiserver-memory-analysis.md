@@ -74,6 +74,19 @@ number of installed APIs and CRDs.
 Attribution gotcha: the `json.Marshal` (11.5 MB) and `schemamutation` (9 MB) nodes look
 v2-ish but are both on the **v3** path. V3 is the bigger half of the OpenAPI bucket.
 
+**Baseline API surface on an empty GKE cluster** (observed via `kubectl`):
+
+- **29 system CRDs** ship with an empty cluster. This is what the CRD-proportional costs
+  are paying for at baseline: the apiextensions v3 CRD controller output (12 MB), and
+  plausibly much of the compiled-regexp (~8 MB, CRD validation patterns) and CEL
+  environment (~8 MB) buckets. "Prune unused CRDs" as an operator lever only applies to
+  user-added CRDs on top of these 29 — the baseline is GKE's own.
+- **Only one aggregated APIService** beyond the built-ins: the metrics service
+  (`metrics.k8s.io`). So the kube-aggregator layer (the `proxyHandler` in every request
+  stack trace) is essentially pass-through overhead on an empty cluster, and aggregated
+  OpenAPI merging is near its floor — the ~54 MB OpenAPI bucket is almost entirely
+  built-in types + the 29 system CRDs.
+
 ### 4. Everything else
 
 | Subsystem | In-use |
