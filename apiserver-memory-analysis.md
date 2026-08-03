@@ -280,6 +280,38 @@ Test-design notes worth keeping:
 - Run with `third_party/etcd` on `PATH`:
   `go test ./test/integration/apiserver/ -run TestAllocatorPoolBufferCapacityBounded`.
 
+**Encode CPU benchmark** (commit `e18718c0c4e`,
+`responsewriters/allocator_put_bench_test.go`,
+`BenchmarkProtobufEncodeAllocatorPutStrategies`): same-binary, three-way comparison of
+put strategies on the non-streaming protobuf encode path — `Put=Uncapped` (old
+`AllocatorPool.Put`), `Put=Capped` (new `PutAllocator`), `Put=None` (`SimpleAllocator`
+floor). Payloads straddle the 512 KiB cap. benchstat over 6 runs (AMD Ryzen 7 8745HS):
+
+| Payload | Uncapped → Capped (sec/op) | B/op | Verdict |
+|---|---|---|---|
+| 493 KiB (below cap) | 252.5µs → 250.5µs, ~ (p=0.24) | unchanged (16.5 KiB) | **no regression**; pooling preserved (unpooled floor is 2.5× slower at 621µs) |
+| 4.9 MiB (above cap) | 3.01ms → 3.93ms, **+31%** (p=0.004) | 177 KiB → 5.1 MiB | pays a fresh buffer per encode |
+| 48 MiB (above cap) | 48.7ms → 54.2ms, **+11%** (p=0.002) | 2.6 MiB → 49.8 MiB | same |
+
+Above the cap, `Put=Capped` is statistically indistinguishable from `Put=None`
+(p≥0.13) — i.e. over-cap encodes simply behave as if unpooled, which is the intended
+trade. Interpretation:
+
+- **No regression at all for sub-cap responses** — the overwhelming majority of API
+  traffic.
+- The +11–31% penalty is **encode-only microbenchmark time**; in a real request, encode
+  is a fraction of total cost (authn/z, etcd read, conversion, gzip — which kicks in at
+  128 KiB and dwarfs a buffer alloc — network write), so effective per-request impact on
+  >512 KiB responses is much smaller.
+- Streaming collection encoding (`StreamingCollectionsEncoding`, used for large LISTs on
+  recent versions) allocates per-item, never crosses the cap, and is unaffected —
+  that's why the pre-existing `BenchmarkStreamingProtobufPodListAllocatorReuse` couldn't
+  measure this change.
+- Tuning note: the profiled GKE pathology was ~931 KB ConfigMap response buffers. A
+  512 KiB cap unpools exactly those; raising the cap to 1 MiB would keep max-size
+  ConfigMap GETs pooled at the cost of doubling the pool's worst-case retention bound.
+  Decide with the before/after cluster profile.
+
 Caveats to verify with a before/after profile:
 
 1. **Watch-held buffers are only capped at connection close** — the cap applies at
@@ -349,7 +381,10 @@ go tool pprof -top -unit=mb -show_from='kube-openapi' control_profile.pb.gz
       16.2 MB watch-cache population.
 - [x] Prototype the AllocatorPool buffer-size cap (branch `allocator-pool-buffer-cap`,
       see "Prototype" section above).
-- [ ] Benchmark encode CPU / allocs with the cap in place to confirm no regression, then
-      measure heap delta under GET-heavy load (before/after profile).
+- [x] Benchmark encode CPU / allocs with the cap in place (see "Encode CPU benchmark"
+      above): no regression below the cap; above the cap, encode behaves as unpooled
+      (+11–31% encode-only time).
+- [ ] Measure heap delta under GET-heavy load (before/after cluster profile); use it to
+      decide between the 512 KiB and 1 MiB cap.
 - [ ] Scrape `/metrics` (`go_memstats_*`, `process_resident_memory_bytes`) alongside the
       next heap profile to reconcile live heap → RSS exactly.
