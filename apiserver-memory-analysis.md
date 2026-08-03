@@ -14,6 +14,7 @@ profile analysis. This is a living document — update as new profiles and findi
 | Total in-use heap | **253.7 MB** |
 | Lifetime allocations (`alloc_space`) | **54.7 GB** |
 | Cluster state | **Empty cluster**, ~30 minutes after startup |
+| Cluster build | Built at **Kubernetes HEAD** from ~1 week before capture (late July 2026, v1.37 dev cycle) |
 | Working Set Memory (avg) | ~615 MB |
 | Resident Set Size (avg) | ~680 MB |
 
@@ -181,8 +182,10 @@ Napkin total: 630–700 MB. Observed 680 MB lands in that band.
 ## Source-Level Root Cause: the Serialization Buffer Pool (Opportunity #1/#2)
 
 Traced in the kubernetes source tree (`~/go/src/k8s.io/kubernetes`, v1.37.0-beta.0-490,
-branch `openapi-v2-lazy-build`). The 49.2 MB pinned in `runtime.(*Allocator).Allocate` is
-explained by three interacting behaviors:
+branch `openapi-v2-lazy-build`). The profiled cluster was built at HEAD ~1 week before
+capture, so this source tree closely matches the profiled binary — the code-level
+attribution here carries little version-skew risk. The 49.2 MB pinned in
+`runtime.(*Allocator).Allocate` is explained by three interacting behaviors:
 
 1. **Buffers never shrink and growth overshoots.**
    `staging/src/k8s.io/apimachinery/pkg/runtime/allocator.go` — `Allocator.buf` is reused
