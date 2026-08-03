@@ -109,6 +109,53 @@ ConfigMaps are the #1 concrete API type in churn as well as in live watch-cache 
 4. **Metrics scrape churn** — 6.3 GB allocated lifetime; little live memory, but real GC
    pressure. Scrape interval / cardinality are the knobs.
 
+## Source-Level Root Cause: the Serialization Buffer Pool (Opportunity #1/#2)
+
+Traced in the kubernetes source tree (`~/go/src/k8s.io/kubernetes`, v1.37.0-beta.0-490,
+branch `openapi-v2-lazy-build`). The 49.2 MB pinned in `runtime.(*Allocator).Allocate` is
+explained by three interacting behaviors:
+
+1. **Buffers never shrink and growth overshoots.**
+   `staging/src/k8s.io/apimachinery/pkg/runtime/allocator.go` — `Allocator.buf` is reused
+   across encodes and only ever grows, with formula `size = 2*cap + n`. An allocator that
+   alternates between medium and large objects ratchets upward (e.g. 512 KB cap serving a
+   600 KB object → 1.6 MB; next slightly-larger object → 4.9 MB). Capacity converges to a
+   multiple of the largest object ever encoded, and there is no shrink/trim path.
+
+2. **Grown allocators are recycled through a global `sync.Pool`.**
+   `AllocatorPool` (same file) caches allocators between requests.
+   `responsewriters.SerializeObject` (`writers.go:110-117`) gets one per GET/LIST/UPDATE
+   response and `Put`s it back after the response — with whatever buffer capacity it
+   accumulated. Under constant traffic, pool entries are continuously reused so GC never
+   evicts them: **N concurrent encodes of large objects ⇒ N multi-MB buffers pinned
+   indefinitely.** This matches the 40.5 MB attributed to `GetResource`: the buffers were
+   *allocated* while serving GETs of large objects (ConfigMaps top out at 1 MiB) and are
+   now *retained* by the pool. The code comment in `allocator.go` even anticipates this
+   ("consider introducing multiple pools for storing buffers of different sizes").
+
+3. **Watch sessions pin an allocator for the whole connection.**
+   `endpoints/handlers/watch.go:135-160` — each watch grabs an allocator "for the entire
+   watch session", released only when the connection closes. Watches live for
+   minutes-to-hours, so every watch on a resource with occasional large objects holds a
+   large-capacity buffer the entire time. (Profile shows ~4.6 MB allocated at the watch
+   encoders themselves, but watch sessions also hold pool-grown buffers.)
+
+Buffer sizing is exact-fit per object: `protobuf.doEncode` calls
+`memAlloc.Allocate(estimatedSize)` for the full serialized object size
+(`protobuf.go:212,243,264,513`), so buffer capacity tracks the largest object served.
+
+**Candidate fixes (apiserver-side, complements the client-side ConfigMap audit):**
+
+- **Cap pooled buffer size** — drop (don't `Put`) allocators whose capacity exceeds a
+  threshold (e.g. 256 KiB–1 MiB), standard `sync.Pool` hygiene as done in `fmt`/`http2`.
+  Cheap, low-risk, directly bounds steady-state pool memory.
+- **Fix the growth formula** — `2*cap + n` overshoots badly for large `n`; something like
+  `max(2*cap, n)` or rounding `n` up to a size class avoids multi-× overshoot.
+- **Trim watch-session allocators** — release or shrink the per-watch buffer after each
+  event (or periodically), instead of holding peak capacity for the connection lifetime.
+- **Size-classed pools** — the multi-pool idea from the code comment; more invasive,
+  probably only worth it if the cap approach measurably regresses CPU.
+
 ## PR: Lazy-Load the Pre-Built Swagger Doc for OpenAPI v2
 
 **Proposal:** `/openapi/v2` is rarely used; lazy-load its pre-built swagger doc instead of
@@ -163,3 +210,5 @@ go tool pprof -top -unit=mb -show_from='kube-openapi' control_profile.pb.gz
 - [ ] Capture a comparison profile after the v2 lazy-load PR to confirm the ~16 MB delta.
 - [ ] Investigate whether large individual ConfigMaps (vs. many small ones) dominate the
       16.2 MB watch-cache population.
+- [ ] Prototype the AllocatorPool buffer-size cap and benchmark encode CPU / allocs to
+      confirm no regression, then measure heap delta under GET-heavy load.
