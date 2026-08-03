@@ -236,6 +236,34 @@ Implemented on branch `allocator-pool-buffer-cap` in the kubernetes tree (commit
 | **Net live-heap savings** | **~35–45 MB** (~16% of the 254 MB heap) |
 | **Working-set savings** (×~2 GOGC multiplier) | **~70–90 MB, i.e. ~11–15% of the 615 MB avg WSS** |
 
+**Integration test** (commit `f8ef802568d`,
+`test/integration/apiserver/allocator_pool_test.go`,
+`TestAllocatorPoolBufferCapacityBounded`): runs a real apiserver in-process (so the
+`AllocatorPool` under test is shared with the serving path), serves protobuf GETs of a
+~900 KiB ConfigMap (above the cap) and a 64 KiB ConfigMap (below it), then drains the
+pool and inspects retained buffer capacities. Two guards:
+
+- **Invariant:** no drained allocator may retain more than 512 KiB.
+- **Positive control:** at least one drained allocator must retain ≥ 64 KiB, proving the
+  pool still reuses buffers for sub-cap responses (the invariant can't pass vacuously if
+  pooling breaks entirely).
+
+Validated in both directions: PASSes with the fix; with `SerializeObject` temporarily
+reverted to the uncapped `Put`, it FAILs on the first round, catching a 931,250-byte
+buffer in the pool — the exact pathology from the GKE profile.
+
+Test-design notes worth keeping:
+
+- Protobuf content type is required: `SerializeObject` only uses `AllocatorPool` for
+  encoders implementing `EncoderWithAllocator` (protobuf yes, JSON no). A JSON-based test
+  would exercise nothing.
+- `sync.Pool` contents are cleared by GC — the test disables GC
+  (`debug.SetGCPercent(-1)`) between serving and draining to stay deterministic.
+- `Allocator.Allocate(0)` exposes the retained buffer capacity from outside the package
+  without growing it (`cap(a.Allocate(0))`) — no test-only accessors needed.
+- Run with `third_party/etcd` on `PATH`:
+  `go test ./test/integration/apiserver/ -run TestAllocatorPoolBufferCapacityBounded`.
+
 Caveats to verify with a before/after profile:
 
 1. **Watch-held buffers are only capped at connection close** — the cap applies at
