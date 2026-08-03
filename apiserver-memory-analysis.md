@@ -212,6 +212,43 @@ Buffer sizing is exact-fit per object: `protobuf.doEncode` calls
 - **Size-classed pools** — the multi-pool idea from the code comment; more invasive,
   probably only worth it if the cap approach measurably regresses CPU.
 
+### Prototype: AllocatorPool buffer-size cap
+
+Implemented on branch `allocator-pool-buffer-cap` in the kubernetes tree (commit
+`dc1dccdd4a9`, off master at v1.37 dev). Changes:
+
+- `runtime.PutAllocator()` in `apimachinery/pkg/runtime/allocator.go`: drops buffers
+  whose capacity exceeds `maxPooledBufferCapacity` (**512 KiB**) before returning the
+  allocator to the pool; the allocator struct itself is still pooled. Encodes larger
+  than the cap still work — their buffers just go to the GC instead of the pool.
+- All three `AllocatorPool.Put` sites converted: `responsewriters/writers.go`
+  (GET/LIST/UPDATE responses) and both watch teardown paths in `handlers/watch.go`.
+- Unit tests added (drop-oversized, keep-small, ignore-other-types); apimachinery
+  runtime + apiserver endpoints handler package tests pass.
+
+**Estimated savings** (from the 2026-07-29 profile):
+
+| | |
+|---|---|
+| Currently pinned in `Allocator.Allocate` | 49.2 MB |
+| Post-fix worst case (~30 pooled allocators × 512 KiB) | ~15 MB |
+| Post-fix realistic idle-cluster retention | ~2–5 MB (+ transient in-flight buffers) |
+| **Net live-heap savings** | **~35–45 MB** (~16% of the 254 MB heap) |
+| **Working-set savings** (×~2 GOGC multiplier) | **~70–90 MB, i.e. ~11–15% of the 615 MB avg WSS** |
+
+Caveats to verify with a before/after profile:
+
+1. **Watch-held buffers are only capped at connection close** — the cap applies at
+   `Put`, so a live watch that once encoded a large object keeps its oversized buffer
+   until the watch ends. If a meaningful share of the 49 MB is held by open watches
+   rather than sitting in the pool, savings phase in over watch-connection lifetimes.
+   Follow-up if so: trim the per-watch allocator after each event.
+2. **Added GC churn for >512 KiB responses** — each now allocates a fresh buffer.
+   Expected to be negligible against the existing 54.7 GB lifetime churn baseline, but
+   the encode benchmarks should confirm no CPU regression.
+3. The 512 KiB threshold is a first guess (larger than ~99% of API objects, small
+   enough to bound the pool at N_concurrent × 512 KiB); tune with benchmark data.
+
 ## PR: Lazy-Load the Pre-Built Swagger Doc for OpenAPI v2
 
 **Proposal:** `/openapi/v2` is rarely used; lazy-load its pre-built swagger doc instead of
@@ -266,7 +303,9 @@ go tool pprof -top -unit=mb -show_from='kube-openapi' control_profile.pb.gz
 - [ ] Capture a comparison profile after the v2 lazy-load PR to confirm the ~16 MB delta.
 - [ ] Investigate whether large individual ConfigMaps (vs. many small ones) dominate the
       16.2 MB watch-cache population.
-- [ ] Prototype the AllocatorPool buffer-size cap and benchmark encode CPU / allocs to
-      confirm no regression, then measure heap delta under GET-heavy load.
+- [x] Prototype the AllocatorPool buffer-size cap (branch `allocator-pool-buffer-cap`,
+      see "Prototype" section above).
+- [ ] Benchmark encode CPU / allocs with the cap in place to confirm no regression, then
+      measure heap delta under GET-heavy load (before/after profile).
 - [ ] Scrape `/metrics` (`go_memstats_*`, `process_resident_memory_bytes`) alongside the
       next heap profile to reconcile live heap → RSS exactly.
