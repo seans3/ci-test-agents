@@ -13,6 +13,9 @@ profile analysis. This is a living document — update as new profiles and findi
 | Default sample type | `inuse_space` |
 | Total in-use heap | **253.7 MB** |
 | Lifetime allocations (`alloc_space`) | **54.7 GB** |
+| Cluster state | **Empty cluster**, ~30 minutes after startup |
+| Working Set Memory (avg) | ~615 MB |
+| Resident Set Size (avg) | ~680 MB |
 
 ## In-Use Heap Breakdown (steady-state footprint)
 
@@ -94,6 +97,59 @@ Top contributors to GC pressure:
 | `bytes.growSlice` | 3.4 GB |
 
 ConfigMaps are the #1 concrete API type in churn as well as in live watch-cache memory.
+
+## Heap vs. Working Set vs. RSS
+
+Observed: ~250 MB pprof heap, ~615 MB Working Set, ~680 MB RSS. **These numbers are
+consistent** — a 2–3× RSS-to-live-heap ratio is the textbook profile for a Go service.
+Only a ratio that grows over time would be a red flag.
+
+### Definitions
+
+- **Working Set Memory** (GKE / cadvisor `container_memory_working_set_bytes`): total
+  cgroup memory usage minus **inactive** file-backed page cache. Includes anonymous
+  memory, kernel memory charged to the cgroup, and *active* page cache. This is the
+  operationally important number: kubelet uses it for eviction decisions and it
+  approximates what the OOM killer sees.
+- **RSS**: depends on the source. The container metric (`container_memory_rss`) is
+  anonymous memory only. Process-level RSS (`ps`, `/proc/<pid>/status` VmRSS) is all
+  resident physical pages — anonymous *plus* file-backed, including the mapped binary.
+  Since observed RSS (680 MB) > Working Set (615 MB), it is almost certainly
+  process-level RSS: the kube-apiserver binary is ~150 MB on disk, and its resident text
+  pages count toward process RSS but largely fall out of Working Set once inactive.
+
+### Reconciling 250 MB live heap → ~680 MB RSS
+
+pprof `inuse_space` counts only *live heap objects at the last GC*. On top of that:
+
+| Component | Estimate | Notes |
+|---|---|---|
+| Live heap (pprof) | 250 MB | what the profile measures |
+| GC headroom + lazy page return | +200–300 MB | `GOGC=100` lets heap grow to ~2× live before collecting; freed pages returned to OS lazily. **The biggest chunk.** |
+| Heap fragmentation | ~10–15% of arena | partially-filled spans |
+| Goroutine stacks | +20–60 MB | thousands of goroutines (one-plus per watch connection) |
+| Runtime/GC metadata | +10–20 MB | GC bitmaps, span structures (~2–3% of arena) |
+| Binary text/data pages | +50–150 MB | process RSS only; also explains RSS > Working Set |
+
+Napkin total: 630–700 MB. Observed 680 MB lands in that band.
+
+### Implications
+
+1. **Every MB of live heap saved is worth ~2 MB of working set** because of the GOGC
+   multiplier — the ~50 MB allocator-pool fix and ~16 MB OpenAPI v2 savings are worth
+   roughly double at the working-set level. (`GOMEMLIMIT` could trade the headroom for GC
+   CPU instead, but that's a blunter instrument.)
+2. **The gap can be reconciled precisely** from the apiserver's `/metrics`:
+   `go_memstats_heap_inuse_bytes`, `go_memstats_heap_idle_bytes`,
+   `go_memstats_heap_released_bytes`, `go_memstats_stack_inuse_bytes`,
+   `process_resident_memory_bytes`. Those five account for the gap exactly and separate
+   reclaimable GC headroom from truly pinned memory.
+3. **The profiled traffic is baseline, not workload.** This is an *empty* cluster 30
+   minutes after startup, yet the profile shows 40 MB of in-flight GET-response buffers
+   and 3.8 GB of lifetime ConfigMap decode churn. That traffic is GKE system components
+   (kube-system agents, monitoring, etc.), which makes the "find the noisy client" step
+   both easier (small suspect pool) and more valuable (it's baseline cost on every
+   cluster).
 
 ## Memory-Saving Opportunities (ranked)
 
@@ -212,3 +268,5 @@ go tool pprof -top -unit=mb -show_from='kube-openapi' control_profile.pb.gz
       16.2 MB watch-cache population.
 - [ ] Prototype the AllocatorPool buffer-size cap and benchmark encode CPU / allocs to
       confirm no regression, then measure heap delta under GET-heavy load.
+- [ ] Scrape `/metrics` (`go_memstats_*`, `process_resident_memory_bytes`) alongside the
+      next heap profile to reconcile live heap → RSS exactly.
